@@ -3,7 +3,7 @@
 %ignore loader_t::load_file;
 %ignore loader_t::save_file;
 %ignore loader_t::move_segm;
-%ignore loader_t::init_loader_options;
+%ignore loader_t::process_archive;
 %ignore plugin_t;
 
 %ignore vloader_failure;
@@ -11,17 +11,14 @@
 
 // TODO: These could be wrapped if needed
 %ignore load_info_t;
-%ignore add_plugin_option;
-%ignore get_plugins_path;
+%ignore get_plugins_paths;
 %ignore build_loaders_list;
 %ignore free_loaders_list;
 %ignore get_loader_name_from_dll;
 %ignore get_loader_name;
-%ignore init_loader_options;
 %ignore load_nonbinary_file;
 %ignore impinfo_t;
 %ignore import_module;
-%ignore plugin_info_t;
 %ignore get_plugins;
 %ignore invoke_plugin;
 %ignore dbg_info_t;
@@ -35,14 +32,6 @@
 %ignore html_line_cb_t;
 %ignore gen_outline_t;
 %ignore create_filename_cmt;
-%ignore hook_cb_t;
-%ignore hook_type_t;
-%ignore hook_to_notification_point;
-%ignore unhook_from_notification_point;
-%ignore invoke_callbacks;
-
-// Ignore this experimental function
-%ignore gen_dev_event;
 
 // Ignore kernel-only & unexported symbols
 %ignore LDSC;
@@ -63,11 +52,12 @@
 %ignore RE_BADATP;
 %ignore RE_BADMAP;
 %ignore load_dll_or_die;
-%ignore load_dll_or_say;
+%ignore load_core_module;
+%ignore load_core_module_or_die;
+%ignore _load_core_module;
 %ignore free_dll;
 %ignore IDP_DESC_START;
 %ignore IDP_DESC_END;
-%ignore get_idp_desc;
 %ignore get_idp_descs;
 %ignore init_fileregions;
 %ignore term_fileregions;
@@ -75,147 +65,32 @@
 %ignore add_fileregion;
 %ignore move_fileregions;
 %ignore del_fileregions;
-%ignore local_gen_idc_file;
-%ignore print_all_places;
-%ignore save_text_line;
-%ignore print_all_structs;
-%ignore print_all_enums;
-%ignore enum_processor_modules;
 %ignore enum_plugins;
-%ignore database_id0;
 %ignore is_database_ext;
-%ignore ida_database_memory;
-%ignore ida_workdir;
 %ignore is_temp_database;
-%ignore pe_create_idata;
-%ignore pe_load_resources;
-%ignore pe_create_flat_group;
-%ignore initializing;
-%ignore highest_processor_level;
-%ignore dbcheck_t;
-%ignore DBCHK_NONE;
-%ignore DBCHK_OK;
-%ignore DBCHK_BAD;
-%ignore DBCHK_NEW;
-%ignore check_database;
-%ignore open_database;
-%ignore get_workbase_fname;
-%ignore close_database;
-%ignore compress_btree;
-%ignore get_input_file_from_archive;
-%ignore loader_move_segm;
-%ignore generate_ida_copyright;
-%ignore clear_plugin_options;
-%ignore is_in_loader;
-%ignore get_ids_filename;
-%ignore is_embedded_dbfile_ext;
-%ignore cpp_namespaces;
-%ignore max_trusted_idb_count;
-%ignore no_disk_space_handler;
 
 %ignore mem2base;
 %rename (mem2base) py_mem2base;
 %ignore update_snapshot_attributes;
-%ignore build_snapshot_tree;
 %ignore visit_snapshot_tree;
-%ignore snapshot_t;
-%ignore snapshots_t;
 %ignore load_plugin;
 %rename (load_plugin) py_load_plugin;
 %ignore run_plugin;
 %rename (run_plugin) py_run_plugin;
+%ignore load_and_run_plugin;
+%rename (load_and_run_plugin) py_load_and_run_plugin;
+
+%extend qvector< snapshot_t *> {
+    snapshot_t *at(size_t n) { return self->at(n); }
+};
+%ignore qvector< snapshot_t *>::at(size_t) const;
+%ignore qvector< snapshot_t *>::at(size_t);
+%ignore qvector< snapshot_t *>::grow;
+%template(qvector_snapshotvec_t) qvector<snapshot_t *>;
 
 %include "loader.hpp"
 
 %inline %{
 //<inline(py_loader)>
-
-//------------------------------------------------------------------------
-/*
-#<pydoc>
-def mem2base(mem, ea, fpos):
-    """
-    Load database from the memory.
-    @param mem: the buffer
-    @param ea: start linear addresses
-    @param fpos: position in the input file the data is taken from.
-                 if == -1, then no file position correspond to the data.
-    @return:
-        - Returns zero if the passed buffer was not a string
-        - Otherwise 1 is returned
-    """
-    pass
-#</pydoc>
-*/
-static int py_mem2base(PyObject *py_mem, ea_t ea, long fpos = -1)
-{
-  Py_ssize_t len;
-  char *buf;
-  {
-    PYW_GIL_CHECK_LOCKED_SCOPE();
-    if ( PyString_AsStringAndSize(py_mem, &buf, &len) == -1 )
-      return 0;
-  }
-
-  return mem2base((void *)buf, ea, ea+len, fpos);
-}
-
-//------------------------------------------------------------------------
-/*
-#<pydoc>
-def load_plugin(name):
-    """
-    Loads a plugin
-    @return:
-        - None if plugin could not be loaded
-        - An opaque object representing the loaded plugin
-    """
-    pass
-#</pydoc>
-*/
-static PyObject *py_load_plugin(const char *name)
-{
-  plugin_t *r = load_plugin(name);
-  PYW_GIL_CHECK_LOCKED_SCOPE();
-  if ( r == NULL )
-    Py_RETURN_NONE;
-  else
-    return PyCObject_FromVoidPtr(r, NULL);
-}
-
-//------------------------------------------------------------------------
-/*
-#<pydoc>
-def run_plugin(plg):
-    """
-    Runs a plugin
-    @param plg: A plugin object (returned by load_plugin())
-    @return: Boolean
-    """
-    pass
-#</pydoc>
-*/
-static bool py_run_plugin(PyObject *plg, int arg)
-{
-  PYW_GIL_CHECK_LOCKED_SCOPE();
-  if ( !PyCObject_Check(plg) )
-  {
-    return false;
-  }
-  else
-  {
-    plugin_t *p = (plugin_t *)PyCObject_AsVoidPtr(plg);
-    bool rc;
-    Py_BEGIN_ALLOW_THREADS;
-    rc = run_plugin(p, arg);
-    Py_END_ALLOW_THREADS;
-    return rc;
-  }
-}
-
 //</inline(py_loader)>
-
 %}
-
-
-

@@ -6,47 +6,50 @@ Copyright (c) 1990-2009 Hex-Rays
 ALL RIGHTS RESERVED.
 
 """
+from __future__ import print_function
 
-import idc
 import re
+
+import ida_kernwin
 
 # class to store parsed results
 class exchain:
     def __init__(self, m):
-        self.name       = m.group(1)
-        self.addr       = int(m.group(2), 16)
-
-    def __str__(self):
-        return "%x: %s" % (self.addr, self.name)
+        self.name = m.group(1)
+        self.addr = int(m.group(2), 16)
 
 # Chooser class
-class MyChoose(Choose):
-    def __init__(self, list, title):
-        Choose.__init__(self, list, title)
-        self.width = 250
+class MyChoose(ida_kernwin.Choose):
+    def __init__(self, title, items):
+        ida_kernwin.Choose.__init__(self, title, [ ["Address", 16], ["Name", 250] ])
+        self.items = items
 
-    def enter(self, n):
-        o = self.list[n-1]
-        idc.Jump(o.addr)
+    def OnGetLine(self, n):
+        o = self.items[n]
+        return ["%08X" % o.addr, o.name]
 
-# main
+    def OnGetSize(self):
+        return len(self.items)
+
+    def OnSelectLine(self, n):
+        ida_kernwin.jumpto(self.items[n].addr)
+        return (ida_kernwin.Choose.NOTHING_CHANGED, )
+
 def main():
-    s = idc.Eval('SendDbgCommand("!exchain")')
-    if "IDC_FAILURE" in s:
-        return (False, "Cannot execute the command")
+    ok, s = ida_dbg.send_dbg_command("!exchain")
+    if not ok:
+        return (False, "Cannot execute the command (%s)" % s)
 
     matches = re.finditer(r'[^:]+: ([^\(]+) \(([^\)]+)\)\n', s)
-    L = []
-    for x in matches:
-        L.append(exchain(x))
-    if not L:
+    entries = [exchain(x) for x in matches]
+    if not entries:
         return (False, "Nothing to display: Could parse the result!")
 
-    # Get a Choose instance
-    chooser = MyChoose(L, "Exchain choose")
-    # Run the chooser
-    chooser.choose()
+    # Show a list of results, and let the user possibly jump to one of those
+    chooser = MyChoose("Exchain choose", entries)
+    chooser.Show()
     return (True, "Success!")
+
 ok, r = main()
 if not ok:
-    print r
+    print(r)

@@ -6,11 +6,11 @@ Copyright (c) 1990-2009 Hex-Rays
 ALL RIGHTS RESERVED.
 
 """
-
-import idc
-from idaapi import Choose
+from __future__ import print_function
 
 import re
+
+import ida_kernwin
 
 # class to store parsed results
 class memva:
@@ -27,26 +27,41 @@ class memva:
         else:
             self.type       = 0
             self.typestr    = ""
-    def __str__(self):
-        return "(Base %08X; RegionSize: %08X; State: %08X/%10s; protect: %08X/%10s; type: %08X/%10s)" % (
-                self.base, self.regionsize, self.state,
-                self.statestr, self.protect,
-                self.protectstr, self.type, self.typestr)
 
 # Chooser class
-class MemChoose(Choose):
-    def __init__(self, list, title):
-        Choose.__init__(self, list, title)
-        self.width = 250
+class MemChoose(ida_kernwin.Choose):
+    def __init__(self, title, items):
+        headers = []
+        headers.append(["Base", 10])
+        headers.append(["RegionSize", 10])
+        headers.append(["State", 20])
+        headers.append(["Protect", 20])
+        headers.append(["Type", 20])
+        ida_kernwin.Choose.__init__(self, title, headers)
+        self.items = items
 
-    def enter(self, n):
-        o = self.list[n-1]
-        idc.Jump(o.base)
+    def OnGetLine(self, n):
+        o = self.items[n]
+        line = []
+        line.append("%08X" % o.base)
+        line.append("%08X" % o.regionsize)
+        line.append("%08X/%10s" % (o.state, o.statestr))
+        line.append("%08X/%10s" % (o.protect, o.protectstr))
+        line.append("%08X/%10s" % (o.type, o.typestr))
+        return line
+
+    def OnGetSize(self):
+        return len(self.items)
+
+    def OnSelectLine(self, n):
+        o = self.items[n]
+        ida_kernwin.jumpto(o.base)
+        return (ida_kernwin.Choose.NOTHING_CHANGED, )
 
 # main
 def main():
-    s = idc.Eval('SendDbgCommand("!vadump")')
-    if "IDC_FAILURE" in s:
+    ok, s = ida_dbg.send_dbg_command("!vadump")
+    if not ok:
         return (False, "Cannot execute the command")
 
     matches = re.finditer(r'BaseAddress:\s*?(\w+?)\n' \
@@ -61,10 +76,10 @@ def main():
         return (False, "Nothing to display: Could not parse the result!")
 
     # Get a Choose instance
-    chooser = MemChoose(L, "Memory choose")
+    chooser = MemChoose("Memory choose", L)
     # Run the chooser
-    chooser.choose()
+    chooser.Show()
     return (True, "Success!")
 r = main()
 if not r[0]:
-    print r[1]
+    print(r[1])

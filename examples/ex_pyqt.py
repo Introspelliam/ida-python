@@ -1,11 +1,12 @@
+
 from idaapi import PluginForm
-from PyQt4 import QtCore, QtGui
+from PyQt5 import QtCore, QtGui, QtWidgets
 import sip
 
 class MyPluginFormClass(PluginForm):
     def OnCreate(self, form):
         """
-        Called when the plugin form is created
+        Called when the widget is created
         """
 
         # Get parent widget
@@ -15,19 +16,19 @@ class MyPluginFormClass(PluginForm):
 
     def PopulateForm(self):
         # Create layout
-        layout = QtGui.QVBoxLayout()
+        layout = QtWidgets.QVBoxLayout()
 
         layout.addWidget(
-            QtGui.QLabel("Hello from <font color=red>PyQt</font>"))
+            QtWidgets.QLabel("Hello from <font color=red>PyQt</font>"))
         layout.addWidget(
-            QtGui.QLabel("Hello from <font color=blue>IDAPython</font>"))
+            QtWidgets.QLabel("Hello from <font color=blue>IDAPython</font>"))
 
         self.parent.setLayout(layout)
 
 
     def OnClose(self, form):
         """
-        Called when the plugin form is closed
+        Called when the widget is closed
         """
         pass
 

@@ -1,22 +1,23 @@
+from __future__ import print_function
 from tempo import *;
 
 def test_getmeminfo():
     L = tempo.getmeminfo()
     out = []
 
-    # startEA endEA name sclass sbase bitness perm
-    for (startEA, endEA, name, sclass, sbase, bitness, perm) in L:
-        out.append("%x: %x name=<%s> sclass=<%s> sbase=%x bitness=%2x perm=%2x" % (startEA, endEA, name, sclass, sbase, bitness, perm))
+    # start_ea end_ea name sclass sbase bitness perm
+    for (start_ea, end_ea, name, sclass, sbase, bitness, perm) in L:
+        out.append("%x: %x name=<%s> sclass=<%s> sbase=%x bitness=%2x perm=%2x" % (start_ea, end_ea, name, sclass, sbase, bitness, perm))
 
     f = file(r"d:\temp\out.log", "w")
     f.write("\n".join(out))
     f.close()
 
-    print "dumped meminfo!"
+    print("dumped meminfo!")
 
 
 def test_getregs():
-    # name flags class dtyp bit_strings bit_strings_default_mask
+    # name flags class dtype bit_strings bit_strings_default_mask
     L = tempo.getregs()
     out = []
     for (name, flags, cls, dtype, bit_strings, bit_strings_default_mask) in L:
@@ -29,6 +30,6 @@ def test_getregs():
     f.write("\n".join(out))
     f.close()
 
-    print "dumped regs!"
+    print("dumped regs!")
 
 

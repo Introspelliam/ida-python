@@ -1,5 +1,5 @@
 """
-FindInstructions.py: A script to help you find desired opcodes/instructions in a database
+A script to help you find desired opcodes/instructions in a database
 
 The script accepts opcodes and assembly statements (which will be assembled) separated by semicolon
 
@@ -13,14 +13,23 @@ The general syntax is:
 * To specify in which context the instructions should be assembled, pass asm_where=ea:
   find("jmp dword ptr [esp]", asm_where=here())
 
-Copyright (c) 1990-2009 Hex-Rays
+Copyright (c) 1990-2018 Hex-Rays
 ALL RIGHTS RESERVED.
-
-v1.0 - initial version
 """
-import idaapi
+from __future__ import print_function
+import re
+
+import ida_idaapi
+import ida_lines
+import ida_segment
+import ida_kernwin
+import ida_bytes
+import ida_ua
+import ida_ida
+import ida_search
+import ida_funcs
+
 import idautils
-import idc
 
 # -----------------------------------------------------------------------
 def FindInstructions(instr, asm_where=None):
@@ -30,8 +39,9 @@ def FindInstructions(instr, asm_where=None):
     """
     if not asm_where:
         # get first segment
-        asm_where = FirstSeg()
-        if asm_where == idaapi.BADADDR:
+        seg = ida_segment.get_first_seg()
+        asm_where = seg.start_ea if seg else ida_idaapi.BADADDR
+        if asm_where == ida_idaapi.BADADDR:
             return (False, "No segments defined")
 
     # regular expression to distinguish between opcodes and instructions
@@ -48,7 +58,7 @@ def FindInstructions(instr, asm_where=None):
             buf = ''.join([chr(int(x, 16)) for x in line.split()])
         else:
             # assemble the instruction
-            ret, buf = Assemble(asm_where, line)
+            ret, buf = idautils.Assemble(asm_where, line)
             if not ret:
                 return (False, "Failed to assemble:"+line)
         # add the assembled buffer
@@ -56,7 +66,7 @@ def FindInstructions(instr, asm_where=None):
 
     # join the buffer into one string
     buf = ''.join(bufs)
-    
+
     # take total assembled instructions length
     tlen = len(buf)
 
@@ -64,55 +74,67 @@ def FindInstructions(instr, asm_where=None):
     bin_str = ' '.join(["%02X" % ord(x) for x in buf])
 
     # find all binary strings
-    print "Searching for: [%s]" % bin_str
-    ea = MinEA()
+    print("Searching for: [%s]" % bin_str)
+    ea = ida_ida.cvar.inf.min_ea
     ret = []
     while True:
-        ea = FindBinary(ea, SEARCH_DOWN, bin_str)
-        if ea == idaapi.BADADDR:
+        ea = ida_search.find_binary(ea, ida_idaapi.BADADDR, bin_str, 16, ida_search.SEARCH_DOWN)
+        if ea == ida_idaapi.BADADDR:
             break
         ret.append(ea)
-        Message(".")
+        ida_kernwin.msg(".")
         ea += tlen
     if not ret:
         return (False, "Could not match [%s]" % bin_str)
-    Message("\n")
+    ida_kernwin.msg("\n")
     return (True, ret)
 
 # -----------------------------------------------------------------------
 # Chooser class
-class SearchResultChoose(Choose):
-    def __init__(self, list, title):
-        Choose.__init__(self, list, title)
-        self.width = 250
+class SearchResultChoose(ida_kernwin.Choose):
+    def __init__(self, title, items):
+        ida_kernwin.Choose.__init__(
+            self,
+            title,
+            [["Address", 30], ["Function (or segment)", 25], ["Instruction", 20]],
+            width=250)
+        self.items = items
 
-    def enter(self, n):
-        o = self.list[n-1]
-        Jump(o.ea)
+    def OnGetSize(self):
+        return len(self.items)
+
+    def OnGetLine(self, n):
+        i = self.items[n]
+        ea = i.ea
+        return [
+            hex(i.ea),
+            i.funcname_or_segname,
+            i.text
+        ]
+
+    def OnSelectLine(self, n):
+        ida_kernwin.jumpto(self.items[n].ea)
 
 # -----------------------------------------------------------------------
 # class to represent the results
 class SearchResult:
     def __init__(self, ea):
         self.ea = ea
-        if not isCode(GetFlags(ea)):
-            MakeCode(ea)
-        t = idaapi.generate_disasm_line(ea)
-        if t:
-            line = idaapi.tag_remove(t)
-        else:
-            line = ""
-        func = GetFunctionName(ea)
-        self.display = hex(ea) + ": "
-        if func:
-            self.display += func + ": "
-        else:
-            n = SegName(ea)
-            if n: self.display += n + ": "
-        self.display += line
+        self.funcname_or_segname = ""
+        self.text = ""
+        if not ida_bytes.is_code(ida_bytes.get_flags(ea)):
+            ida_ua.create_insn(ea)
 
-    def __str__(self):
-        return self.display
+        # text
+        t = ida_lines.generate_disasm_line(ea)
+        if t:
+            self.text = ida_lines.tag_remove(t)
+
+        # funcname_or_segname
+        n = ida_funcs.get_func_name(ea) \
+            or ida_segment.get_segm_name(ida_segment.getseg(ea))
+        if n:
+            self.funcname_or_segname = n
 
 # -----------------------------------------------------------------------
 def find(s=None, x=False, asm_where=None):
@@ -122,18 +144,18 @@ def find(s=None, x=False, asm_where=None):
         if x:
             results = []
             for ea in ret:
-                seg = idaapi.getseg(ea)
-                if (not seg) or (seg.perm & idaapi.SEGPERM_EXEC) == 0:
+                seg = ida_segment.getseg(ea)
+                if (not seg) or (seg.perm & ida_segment.SEGPERM_EXEC) == 0:
                     continue
                 results.append(SearchResult(ea))
         else:
             results = [SearchResult(ea) for ea in ret]
         title = "Search result for: [%s]" % s
-        idaapi.close_chooser(title)
-        c = SearchResultChoose(results, title)
-        c.choose()
+        ida_kernwin.close_chooser(title)
+        c = SearchResultChoose(title, results)
+        c.Show(True)
     else:
-        print ret
+        print(ret)
 
 # -----------------------------------------------------------------------
-print "Please use find('asm_stmt1;xx yy;...', x=Bool,asm_where=ea) to search for instructions or opcodes. Specify x=true to filter out non-executable segments"
+print("Please use find('asm_stmt1;xx yy;...', x=Bool,asm_where=ea) to search for instructions or opcodes. Specify x=true to filter out non-executable segments")

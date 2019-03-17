@@ -3,7 +3,7 @@
 
 #include <Python.h>
 
-#define SWIG_as_voidptr(a) const_cast< void * >(static_cast< const void * >(a)) 
+#define SWIG_as_voidptr(a) const_cast< void * >(static_cast< const void * >(a))
 
 PyObject *SWIG_NewPointerObj(void *ptr, void *type, int flags);
 
@@ -18,8 +18,6 @@ namespace Swig
     }
   };
 }
-
-#define SWIG_RUNTIME_VERSION "4"
 
 // Some fake SWIG types
 #define SWIGTYPE_p_member_t NULL

@@ -1,3 +1,4 @@
+from __future__ import print_function
 # -----------------------------------------------------------------------
 try:
     import pywraps
@@ -5,12 +6,14 @@ try:
 except:
     pywraps_there = False
 
-import _idaapi
+import _ida_idaapi
 import random
 import operator
 import datetime
 
 #<pycode(py_idaapi)>
+
+__EA64__ = BADADDR == 0xFFFFFFFFFFFFFFFF
 
 import struct
 import traceback
@@ -19,6 +22,7 @@ import sys
 import bisect
 import __builtin__
 import imp
+import re
 
 def require(modulename, package=None):
     """
@@ -34,20 +38,43 @@ def require(modulename, package=None):
     module doesn't exist, it 'import's it, and if it does exist,
     'reload()'s it.
 
+    The importing module (i.e., the module calling require()) will have
+    the loaded module bound to its globals(), under the name 'modulename'.
+    (If require() is called from the command line, the importing module
+    will be '__main__'.)
+
     For more information, see: <http://www.hexblog.com/?p=749>.
     """
+    import inspect
+    frame_obj, filename, line_number, function_name, lines, index = inspect.stack()[1]
+    importer_module = inspect.getmodule(frame_obj)
+    if importer_module is None: # No importer module; called from command line
+        importer_module = sys.modules['__main__']
     if modulename in sys.modules.keys():
         reload(sys.modules[modulename])
+        m = sys.modules[modulename]
     else:
         import importlib
-        import inspect
         m = importlib.import_module(modulename, package)
-        frame_obj, filename, line_number, function_name, lines, index = inspect.stack()[1]
-        importer_module = inspect.getmodule(frame_obj)
-        if importer_module is None: # No importer module; called from command line
-            importer_module = sys.modules['__main__']
-        setattr(importer_module, modulename, m)
         sys.modules[modulename] = m
+    setattr(importer_module, modulename, m)
+
+def _replace_module_function(replacement):
+    name = replacement.__name__
+    modname = replacement.__module__
+    assert(name)
+    assert(modname)
+    mod = sys.modules[modname]
+    orig = getattr(mod, name)
+    replacement.__doc__ = orig.__doc__
+    replacement.__name__ = name
+    replacement.__dict__["orig"] = orig
+    setattr(mod, name, replacement)
+
+def replfun(func):
+    _replace_module_function(func)
+    return func
+
 
 # -----------------------------------------------------------------------
 
@@ -172,6 +199,14 @@ class object_t(object):
         return getattr(self, idx)
 
 # -----------------------------------------------------------------------
+def _qvector_front(self):
+    return self.at(0)
+
+# -----------------------------------------------------------------------
+def _qvector_back(self):
+    return self.at((self.size() - 1) if self.size() else 0)
+
+# -----------------------------------------------------------------------
 def _bounded_getitem_iterator(self):
     """Helper function, to be set as __iter__ method for qvector-, or array-based classes."""
     for i in range(len(self)):
@@ -242,82 +277,6 @@ class PyIdc_cvt_int64__(pyidc_cvt_helper__):
     def __rdiv__(self, other): return self.__op(3, other, True)
 
 # -----------------------------------------------------------------------
-# qstrvec_t clinked object
-class _qstrvec_t(py_clinked_object_t):
-    """
-    WARNING: It is very unlikely an IDAPython user should ever, ever
-    have to use this type. It should only be used for IDAPython internals.
-
-    For example, in py_askusingform.py, we ctypes-expose to the IDA
-    kernel & UI a qstrvec instance, in case a DropdownListControl is
-    constructed.
-    That's because that's what AskUsingForm expects, and we have no
-    choice but to make a DropdownListControl hold a qstrvec_t.
-    This is, afaict, the only situation where a Python
-    _qstrvec_t is required.
-    """
-
-    def __init__(self, items=None):
-        py_clinked_object_t.__init__(self)
-        # Populate the list if needed
-        if items:
-            self.from_list(items)
-
-    def _create_clink(self):
-        return _idaapi.qstrvec_t_create()
-
-    def _del_clink(self, lnk):
-        return _idaapi.qstrvec_t_destroy(lnk)
-
-    def _get_clink_ptr(self):
-        return _idaapi.qstrvec_t_get_clink_ptr(self)
-
-    def assign(self, other):
-        """Copies the contents of 'other' to 'self'"""
-        return _idaapi.qstrvec_t_assign(self, other)
-
-    def __setitem__(self, idx, s):
-        """Sets string at the given index"""
-        return _idaapi.qstrvec_t_set(self, idx, s)
-
-    def __getitem__(self, idx):
-        """Gets the string at the given index"""
-        return _idaapi.qstrvec_t_get(self, idx)
-
-    def __get_size(self):
-        return _idaapi.qstrvec_t_size(self)
-
-    size = property(__get_size)
-    """Returns the count of elements"""
-
-    def addressof(self, idx):
-        """Returns the address (as number) of the qstring at the given index"""
-        return _idaapi.qstrvec_t_addressof(self, idx)
-
-    def add(self, s):
-        """Add a string to the vector"""
-        return _idaapi.qstrvec_t_add(self, s)
-
-    def from_list(self, lst):
-        """Populates the vector from a Python string list"""
-        return _idaapi.qstrvec_t_from_list(self, lst)
-
-    def clear(self, qclear=False):
-        """
-        Clears all strings from the vector.
-        @param qclear: Just reset the size but do not actually free the memory
-        """
-        return _idaapi.qstrvec_t_clear(self, qclear)
-
-    def insert(self, idx, s):
-        """Insert a string into the vector"""
-        return _idaapi.qstrvec_t_insert(self, idx, s)
-
-    def remove(self, idx):
-        """Removes a string from the vector"""
-        return _idaapi.qstrvec_t_remove(self, idx)
-
-# -----------------------------------------------------------------------
 class PyIdc_cvt_refclass__(pyidc_cvt_helper__):
     """Helper class for representing references to immutable objects"""
     def __init__(self, v):
@@ -344,7 +303,8 @@ def as_cstr(val):
 def as_unicode(s):
     """Convenience function to convert a string into appropriate unicode format"""
     # use UTF16 big/little endian, depending on the environment?
-    return unicode(s).encode("UTF-16" + ("BE" if _idaapi.cvar.inf.mf else "LE"))
+    import _ida_ida
+    return unicode(s).encode("UTF-16" + ("BE" if _ida_ida.cvar.inf.is_be() else "LE"))
 
 # -----------------------------------------------------------------------
 def as_uint32(v):
@@ -408,6 +368,19 @@ def struct_unpack(buffer, signed = False, offs = 0):
     # Unpack
     return struct.unpack_from(__struct_unpack_table[n][signed], buffer, offs)[0]
 
+# ------------------------------------------------------------
+try:
+    "".decode("UTF-8").encode("mbcs")
+    has_mbcs = True
+except:
+    has_mbcs = False
+
+def _utf8_native(utf8):
+    if has_mbcs:
+        uni = utf8.decode("UTF-8")
+        return uni.encode("mbcs")
+    else:
+        return utf8
 
 # ------------------------------------------------------------
 def IDAPython_ExecSystem(cmd):
@@ -415,6 +388,7 @@ def IDAPython_ExecSystem(cmd):
     Executes a command with popen().
     """
     try:
+        cmd = _utf8_native(cmd)
         f = os.popen(cmd, "r")
         s = ''.join(f.readlines())
         f.close()
@@ -435,13 +409,14 @@ def IDAPython_FormatExc(etype, value, tb, limit=None):
 
 
 # ------------------------------------------------------------
-def IDAPython_ExecScript(script, g):
+def IDAPython_ExecScript(script, g, print_error=True):
     """
     Run the specified script.
     It also addresses http://code.google.com/p/idapython/issues/detail?id=42
 
     This function is used by the low-level plugin code.
     """
+    script = _utf8_native(script)
     scriptpath = os.path.dirname(script)
     if len(scriptpath) and scriptpath not in sys.path:
         sys.path.append(scriptpath)
@@ -458,7 +433,8 @@ def IDAPython_ExecScript(script, g):
         PY_COMPILE_ERR = None
     except Exception as e:
         PY_COMPILE_ERR = "%s\n%s" % (str(e), traceback.format_exc())
-        print(PY_COMPILE_ERR)
+        if print_error:
+            print(PY_COMPILE_ERR)
     finally:
         # Restore state
         g['__file__'] = old__file__
@@ -467,11 +443,12 @@ def IDAPython_ExecScript(script, g):
     return PY_COMPILE_ERR
 
 # ------------------------------------------------------------
-def IDAPython_LoadProcMod(script, g):
+def IDAPython_LoadProcMod(script, g, print_error=True):
     """
     Load processor module.
     """
-    pname = g['__name__'] if g and g.has_key("__name__") else '__main__'
+    script = _utf8_native(script)
+    pname = g['__name__'] if g and "__name__" in g else '__main__'
     parent = sys.modules[pname]
 
     scriptpath, scriptname = os.path.split(script)
@@ -497,7 +474,8 @@ def IDAPython_LoadProcMod(script, g):
         PY_COMPILE_ERR = None
     except Exception as e:
         PY_COMPILE_ERR = "%s\n%s" % (str(e), traceback.format_exc())
-        print(PY_COMPILE_ERR)
+        if print_error:
+            print(PY_COMPILE_ERR)
     finally:
         if fp: fp.close()
 
@@ -506,11 +484,12 @@ def IDAPython_LoadProcMod(script, g):
     return (PY_COMPILE_ERR, procobj)
 
 # ------------------------------------------------------------
-def IDAPython_UnLoadProcMod(script, g):
+def IDAPython_UnLoadProcMod(script, g, print_error=True):
     """
     Unload processor module.
     """
-    pname = g['__name__'] if g and g.has_key("__name__") else '__main__'
+    script = _utf8_native(script)
+    pname = g['__name__'] if g and "__name__" in g else '__main__'
     parent = sys.modules[pname]
 
     scriptname = os.path.split(script)[1]
@@ -525,81 +504,158 @@ def IDAPython_UnLoadProcMod(script, g):
 class __IDAPython_Completion_Util(object):
     """Internal utility class for auto-completion support"""
     def __init__(self):
-        self.n = 0
-        self.completion = None
-        self.lastmodule = None
+        pass
 
-    @staticmethod
-    def parse_identifier(line, prefix, prefix_start):
-        """
-        Parse a line and extracts identifier
-        """
-        id_start = prefix_start
-        while id_start > 0:
-            ch = line[id_start]
-            if not ch.isalpha() and ch != '.' and ch != '_':
-                id_start += 1
-                break
-            id_start -= 1
+    def debug(self, *args):
+        try:
+            msg = args[0] % args[1:]
+            print("IDAPython_Completion_Util: %s" % msg)
+        except Exception as e:
+            print("debug() got exception during debug(*args=%s):\n%s" % (
+                str(args),
+                traceback.format_exc()))
 
-        return line[id_start:prefix_start + len(prefix)]
-
-    @staticmethod
-    def dir_of(m, prefix):
+    def dir_namespace(self, m, prefix):
         return [x for x in dir(m) if x.startswith(prefix)]
 
-    @classmethod
-    def get_completion(cls, id, prefix):
+    def maybe_extend_syntactically(self, ns, name, line, syntax_char):
+        to_add = None
         try:
-            m = sys.modules['__main__']
-
-            parts = id.split('.')
-            c = len(parts)
-
-            for i in xrange(0, c-1):
-                m = getattr(m, parts[i])
-        except Exception as e:
-            return (None, None)
-        else:
-            # search in the module
-            completion = cls.dir_of(m, prefix)
-
-            # no completion found? looking from the global scope? then try the builtins
-            if not completion and c == 1:
-                completion = cls.dir_of(__builtin__, prefix)
-
-            return (m, completion) if completion else (None, None)
-
-    def __call__(self, prefix, n, line, prefix_start):
-        if n == 0:
-            self.n = n
-            id = self.parse_identifier(line, prefix, prefix_start)
-            self.lastmodule, self.completion = self.get_completion(id, prefix)
-
-        if self.completion is None or n >= len(self.completion):
-            return None
-
-        s = self.completion[n]
-        try:
-            attr = getattr(self.lastmodule, s)
+            attr = getattr(ns, name)
             # Is it callable?
             if callable(attr):
-                return s + ("" if line.startswith("?") else "(")
+                if not line.startswith("?"):
+                    to_add = "("
             # Is it iterable?
             elif isinstance(attr, basestring) or getattr(attr, '__iter__', False):
-                return s + "["
+                to_add = "["
         except:
+            # self.debug("maybe_extend_syntactically() got an exception:\n%s", traceback.format_exc())
             pass
+        if to_add is not None and (syntax_char is None or to_add == syntax_char):
+            name += to_add
+        return name
 
-        return s
+    def get_candidates(self, qname, line, match_syntax_char):
+        # self.debug("get_candidates(qname=%s, line=%s, has_syntax=%s)", qname, line, has_syntax)
+        results = []
+        try:
+            ns = sys.modules['__main__']
+            parts = qname.split('.')
+            # self.debug("get_candidates() got parts: %s", parts)
+            for i in xrange(0, len(parts) - 1):
+                ns = getattr(ns, parts[i])
+        except Exception as e:
+            # self.debug("get_candidates() got exception:\n%s", traceback.format_exc())
+            pass
+        else:
+            # search in the namespace
+            last_token = parts[-1]
+            results = self.dir_namespace(ns, last_token)
+            # self.debug("get_candidates() completions for %s in %s: %s", last_token, ns, results)
+
+            # no completion found? looking from the global scope? then try the builtins
+            if not results and len(parts) == 1:
+                results = self.dir_namespace(__builtin__, last_token)
+                # self.debug("get_candidates() completions for %s in %s: %s", last_token, __builtin__, results)
+
+            results = map(lambda r: self.maybe_extend_syntactically(ns, r, line, match_syntax_char), results)
+            ns_parts = parts[:-1]
+            results = map(lambda r: ".".join(ns_parts + [r]), results)
+            # self.debug("get_candidates() => '%s'", str(results))
+            return results
+
+    QNAME_PAT = re.compile(r"([a-zA-Z_]([a-zA-Z0-9_\.]*)?)")
+
+    def __call__(self, line, x):
+        try:
+            # self.debug("__call__(line=%s, x=%s)", line, x)
+            uline = line.decode("UTF-8")
+            result = None
+
+            # Kludge: if the we are past the last char, and that char is syntax:
+            #    idaapi.print(
+            #                 ^
+            # then we want to backtrack to the previous non-syntax char,
+            # and then instruct get_candidates() to not extend the match
+            # with possible syntax.
+            match_syntax_char = None
+            if x > 0 and uline[x-1] in "[({":
+                match_syntax_char = uline[x-1]
+                x -= 1
+
+            # Find what looks like an identifier (possibly qualified)
+            for match in re.finditer(self.QNAME_PAT, uline):
+                qname, start, end = match.group(1).encode("UTF-8"), match.start(1), match.end(1)
+                if x >= start and x <= end:
+                    result = self.get_candidates(qname, line, match_syntax_char), start, end + (1 if match_syntax_char else 0)
+
+            # self.debug("__call__() => '%s'", str(result))
+            return result
+        except Exception as e:
+            # self.debug("__call__() got exception:\n%s", traceback.format_exc())
+            pass
 
 # Instantiate an IDAPython command completion object (for use with IDA's CLI bar)
 IDAPython_Completion = __IDAPython_Completion_Util()
 
 def _listify_types(*classes):
     for cls in classes:
-        cls.__getitem__ = cls.at
+        cls.at = cls.__getitem__ # '__getitem__' has bounds checkings
         cls.__len__ = cls.size
         cls.__iter__ = _bounded_getitem_iterator
 
+# The general callback format of notify_when() is:
+#    def notify_when_callback(nw_code)
+# In the case of NW_OPENIDB, the callback is:
+#    def notify_when_callback(nw_code, is_old_database)
+NW_OPENIDB    = 0x0001
+"""Notify when the database is opened. Its callback is of the form: def notify_when_callback(nw_code, is_old_database)"""
+NW_CLOSEIDB   = 0x0002
+"""Notify when the database is closed. Its callback is of the form: def notify_when_callback(nw_code)"""
+NW_INITIDA    = 0x0004
+"""Notify when the IDA starts. Its callback is of the form: def notify_when_callback(nw_code)"""
+NW_TERMIDA    = 0x0008
+"""Notify when the IDA terminates. Its callback is of the form: def notify_when_callback(nw_code)"""
+NW_REMOVE     = 0x0010
+"""Use this flag with other flags to uninstall a notifywhen callback"""
+
+
+# Since version 5.5, PyQt5 doesn't simply print the PyQt exceptions by default
+# anymore: https://github.com/baoboa/pyqt5/commit/1e1d8a3ba677ef3e47b916b8a5b9c281d0f8e4b5#diff-848704a82f6a6e3a13112145ce32ac69L63
+# The default behavior now is that qFatal() is called, causing the application
+# to abort().
+# We do not want that to happen in IDA, and simply having a sys.excepthook
+# that is different from sys.__excepthook__ is enough for PyQt5 to return
+# to the previous behavior
+def __install_excepthook():
+    real_hook = sys.excepthook
+    sys.excepthook = lambda *args: real_hook(*args)
+__install_excepthook()
+
+
+# ----------------------------------- helpers for bw-compat w/ 6.95 API
+class __BC695:
+    def __init__(self):
+        self.FIXME = "FIXME @arnaud"
+
+    def false_p(self, *args):
+        return False
+
+    def identity(self, arg):
+        return arg
+
+    def dummy(self, *args):
+        pass
+
+    def replace_fun(self, new):
+        new.__dict__["bc695redef"] = True
+        _replace_module_function(new)
+
+_BC695 = __BC695()
 #</pycode(py_idaapi)>
+
+#<pycode_BC695(py_idaapi)>
+pycim_get_tcustom_control=pycim_get_widget
+pycim_get_tform=pycim_get_widget
+#</pycode_BC695(py_idaapi)>

@@ -7,38 +7,18 @@ class py_graph_t : public py_customidamemo_t
   typedef py_customidamemo_t inherited;
 
 protected:
-
-  virtual void node_info_modified(int n, const node_info_t *ni, uint32 flags)
-  {
-    if ( ni == NULL )
-    {
-      node_cache.erase(n);
-    }
-    else
-    {
-      nodetext_cache_t *c = node_cache.get(n);
-      if ( c != NULL )
-      {
-        if ( (flags & NIF_TEXT) == NIF_TEXT )
-          c->text = ni->text;
-        if ( (flags & NIF_BG_COLOR) == NIF_BG_COLOR )
-          c->bgcolor = ni->bg_color;
-      }
-    }
-  }
-
-  void collect_class_callbacks_ids(callbacks_ids_t *out);
+  void collect_class_callbacks_ids(pycim_callbacks_ids_t *out);
 
 private:
   enum
   {
-    GRCODE_HAVE_USER_HINT        = 0x00010000,
-    GRCODE_HAVE_CLICKED          = 0x00020000,
-    GRCODE_HAVE_DBL_CLICKED      = 0x00040000,
-    GRCODE_HAVE_GOTFOCUS         = 0x00080000,
-    GRCODE_HAVE_LOSTFOCUS        = 0x00100000,
-    GRCODE_HAVE_CHANGED_CURRENT  = 0x00200000,
-    GRCODE_HAVE_COMMAND          = 0x00400000,
+    GRCODE_HAVE_HINT             = 0x00010000,
+    GRCODE_HAVE_EDGE_HINT        = 0x00020000,
+    GRCODE_HAVE_CLICKED          = 0x00040000,
+    GRCODE_HAVE_DBL_CLICKED      = 0x00080000,
+    GRCODE_HAVE_GOTFOCUS         = 0x00100000,
+    GRCODE_HAVE_LOSTFOCUS        = 0x00200000,
+    GRCODE_HAVE_CHANGED_CURRENT  = 0x00400000,
     GRCODE_HAVE_CREATING_GROUP   = 0x00800000,
     GRCODE_HAVE_DELETING_GROUP   = 0x01000000,
     GRCODE_HAVE_GROUP_VISIBILITY = 0x02000000,
@@ -47,9 +27,9 @@ private:
   {
     qstring text;
     bgcolor_t bgcolor;
-    nodetext_cache_t(const nodetext_cache_t &rhs): text(rhs.text), bgcolor(rhs.bgcolor) { }
-    nodetext_cache_t(const char *t, bgcolor_t c): text(t), bgcolor(c) { }
-    nodetext_cache_t() { }
+    nodetext_cache_t(const nodetext_cache_t &rhs): text(rhs.text), bgcolor(rhs.bgcolor) {}
+    nodetext_cache_t(const char *t, bgcolor_t c): text(t), bgcolor(c) {}
+    nodetext_cache_t() {}
   };
 
   class nodetext_cache_map_t: public std::map<int, nodetext_cache_t>
@@ -68,84 +48,29 @@ private:
     }
   };
 
-  class cmdid_map_t: public std::map<Py_ssize_t, py_graph_t *>
-  {
-  private:
-    Py_ssize_t uid;
-  public:
-
-    cmdid_map_t()
-    {
-      // We start by one and keep zero for error id
-      uid = 1;
-    }
-
-    void add(py_graph_t *pyg)
-    {
-      (*this)[uid] = pyg;
-      ++uid;
-    }
-
-    const Py_ssize_t id() const
-    {
-      return uid;
-    }
-
-    void clear(py_graph_t *pyg)
-    {
-      iterator e = end();
-      for (iterator it=begin();it!=end();)
-      {
-        if ( it->second == pyg )
-        {
-          iterator temp = it++;
-          erase(temp);
-        }
-        else
-          ++it;
-      }
-    }
-
-    py_graph_t *get(Py_ssize_t id)
-    {
-      iterator it = find(id);
-      return it == end() ? NULL : it->second;
-    }
-  };
-
-  static cmdid_map_t cmdid_pyg;
-
   bool refresh_needed;
   nodetext_cache_map_t node_cache;
 
   // instance callback
-  int gr_callback(int code, va_list va);
+  ssize_t gr_callback(int code, va_list va);
 
   // static callback
-  static int idaapi s_callback(void *obj, int code, va_list va)
+  static ssize_t idaapi s_callback(void *obj, int code, va_list va)
   {
-    QASSERT(30453, py_customidamemo_t::lookup_info.find_by_py_view(NULL, NULL, (py_graph_t *) obj));
-    PYW_GIL_GET;
-    return ((py_graph_t *)obj)->gr_callback(code, va);
-  }
-
-  static bool idaapi s_menucb(void *ud)
-  {
-    PYW_GIL_GET;
-    Py_ssize_t id = (Py_ssize_t)ud;
-    py_graph_t *_this = cmdid_pyg.get(id);
-    if ( _this != NULL )
-      _this->on_command(id);
-
-    return true;
-  }
-
-  void on_command(Py_ssize_t id)
-  {
-    // Check return value to OnRefresh() call
-    PYW_GIL_CHECK_LOCKED_SCOPE();
-    newref_t ret(PyObject_CallMethod(self.o, (char *)S_ON_COMMAND, "n", id));
-    PyW_ShowCbErr(S_ON_COMMAND);
+    // don't perform sanity check for 'grcode_destroyed', since if we called
+    // Close() on this object, it'll have been marked for later deletion in the
+    // UI, and thus when we end up here, the view has already been destroyed.
+    bool found = pycim_lookup_info.find_by_py_view(NULL, (py_graph_t *) obj);
+    QASSERT(30453, found || code == grcode_destroyed);
+    if ( found )
+    {
+      PYW_GIL_GET;
+      return ((py_graph_t *)obj)->gr_callback(code, va);
+    }
+    else
+    {
+      return 0;
+    }
   }
 
   // Refresh user-defined graph node number and edges
@@ -159,7 +84,9 @@ private:
 
   // Retrieves the hint for the user-defined graph
   // Calls Python and expects a string or None
-  int on_user_hint(mutable_graph_t *, int mousenode, int /*mouseedge_src*/, int /*mouseedge_dst*/, char **hint);
+  int on_hint(char **hint, int node);
+  int on_edge_hint(char **hint, int src, int dest);
+  int _on_hint_epilog(char **hint, ref_t result);
 
   // graph is being destroyed
   void on_graph_destroyed(mutable_graph_t * /*g*/ = NULL)
@@ -307,9 +234,9 @@ private:
 
   void show()
   {
-    TForm *form;
-    if ( lookup_info.find_by_py_view(&form, NULL, this) )
-      open_tform(form, FORM_TAB|FORM_MENU|FORM_QWIDGET);
+    TWidget *view;
+    if ( pycim_lookup_info.find_by_py_view(&view, this) )
+      display_widget(view, WOPN_TAB);
   }
 
   void jump_to_node(int nid)
@@ -345,25 +272,25 @@ private:
     if ( !collect_pyobject_callbacks(self) )
       return -1;
 
-    // Create form
-    HWND hwnd = NULL;
-    TForm *form = create_tform(title, &hwnd);
-    if ( hwnd != NULL ) // Created new tform
+    TWidget *widget = find_widget(title);
+    if ( widget == NULL ) // create new widget
     {
-      lookup_info_t::entry_t &e = lookup_info.new_entry(this);
+      lookup_entry_t &e = pycim_lookup_info.new_entry(this);
       // get a unique graph id
       netnode id;
       char grnode[MAXSTR];
       qsnprintf(grnode, sizeof(grnode), "$ pygraph %s", title);
       id.create(grnode);
-      graph_viewer_t *pview = create_graph_viewer(form, id, s_callback, this, 0);
-      open_tform(form, FORM_TAB | FORM_MENU | FORM_QWIDGET);
+      // pre-bind 'self', so that 'on_user_refresh()' can complete
+      this->self = borref_t(self);
+      graph_viewer_t *pview = create_graph_viewer(title, id, s_callback, this, 0);
+      this->self = ref_t();
+      display_widget(pview, WOPN_TAB);
+      newref_t ret(PyObject_CallMethod(self, "hook", NULL));
       if ( pview != NULL )
         viewer_fit_window(pview);
       bind(self, pview);
-      install_custom_viewer_handlers();
-      refresh();
-      lookup_info.commit(e, form, view);
+      pycim_lookup_info.commit(e, view);
     }
     else
     {
@@ -374,29 +301,11 @@ private:
     return 0;
   }
 
-  Py_ssize_t add_command(const char *title, const char *hotkey)
-  {
-    if ( !has_callback(GRCODE_HAVE_COMMAND) || view == NULL)
-      return 0;
-    Py_ssize_t cmd_id = cmdid_pyg.id();
-    bool ok = viewer_add_menu_item(view, title, s_menucb, (void *)cmd_id, hotkey, 0);
-    if ( !ok )
-      return 0;
-    cmdid_pyg.add(this);
-    return cmd_id;
-  }
-
 public:
   py_graph_t()
   {
     // form = NULL;
     refresh_needed = true;
-  }
-
-  virtual ~py_graph_t()
-  {
-    // Remove all associated commands from the list
-    cmdid_pyg.clear(this);
   }
 
   static void SelectNode(PyObject *self, int nid)
@@ -405,28 +314,21 @@ public:
       return;
 
     py_graph_t *_this = view_extract_this<py_graph_t>(self);
-    if ( _this == NULL || !lookup_info.find_by_py_view(NULL, NULL, _this) )
+    if ( _this == NULL || !pycim_lookup_info.find_by_py_view(NULL, _this) )
       return;
 
     _this->jump_to_node(nid);
   }
 
-  static Py_ssize_t AddCommand(PyObject *self, const char *title, const char *hotkey)
+  static py_graph_t *Close(PyObject *self)
   {
+    TWidget *view;
     py_graph_t *_this = view_extract_this<py_graph_t>(self);
-    if ( _this == NULL || !lookup_info.find_by_py_view(NULL, NULL, _this) )
-      return 0;
-
-    return _this->add_command(title, hotkey);
-  }
-
-  static void Close(PyObject *self)
-  {
-    TForm *form;
-    py_graph_t *_this = view_extract_this<py_graph_t>(self);
-    if ( _this == NULL || !lookup_info.find_by_py_view(&form, NULL, _this) )
-      return;
-    close_tform(form, FORM_CLOSE_LATER);
+    if ( _this == NULL || !pycim_lookup_info.find_by_py_view(&view, _this) )
+      return NULL;
+    newref_t ret(PyObject_CallMethod(self, "unhook", NULL));
+    close_widget(view, WCLS_CLOSE_LATER);
+    return _this;
   }
 
   static py_graph_t *Show(PyObject *self)
@@ -444,10 +346,9 @@ public:
 
       // Form already created? try to get associated py_graph instance
       // so that we reuse it
-      graph_viewer_t *found_view;
-      TForm *form = find_tform(title.c_str());
-      if ( form != NULL )
-        lookup_info.find_by_form(&found_view, (py_customidamemo_t**) &py_graph, form);
+      TWidget *existing = find_widget(title.c_str());
+      if ( existing != NULL )
+        pycim_lookup_info.find_by_view((py_customidamemo_t**) &py_graph, existing);
 
       if ( py_graph == NULL )
       {
@@ -474,17 +375,17 @@ public:
 };
 
 //-------------------------------------------------------------------------
-void py_graph_t::collect_class_callbacks_ids(callbacks_ids_t *out)
+void py_graph_t::collect_class_callbacks_ids(pycim_callbacks_ids_t *out)
 {
   inherited::collect_class_callbacks_ids(out);
   out->add(S_ON_REFRESH, 0);
   out->add(S_ON_GETTEXT, 0);
   out->add(S_M_EDGES, -1);
   out->add(S_M_NODES, -1);
-  out->add(S_ON_HINT, GRCODE_HAVE_USER_HINT);
+  out->add(S_ON_HINT, GRCODE_HAVE_HINT);
+  out->add(S_ON_EDGE_HINT, GRCODE_HAVE_EDGE_HINT);
   out->add(S_ON_CLICK, GRCODE_HAVE_CLICKED);
   out->add(S_ON_DBL_CLICK, GRCODE_HAVE_DBL_CLICKED);
-  out->add(S_ON_COMMAND, GRCODE_HAVE_COMMAND);
   out->add(S_ON_SELECT, GRCODE_HAVE_CHANGED_CURRENT);
   out->add(S_ON_ACTIVATE, GRCODE_HAVE_GOTFOCUS);
   out->add(S_ON_DEACTIVATE, GRCODE_HAVE_LOSTFOCUS);
@@ -496,7 +397,7 @@ void py_graph_t::collect_class_callbacks_ids(callbacks_ids_t *out)
 //-------------------------------------------------------------------------
 void py_graph_t::on_user_refresh(mutable_graph_t *g)
 {
-  if ( !refresh_needed || self == NULL /* Happens at creation-time */ )
+  if ( !refresh_needed )
     return;
 
   // Check return value to OnRefresh() call
@@ -525,7 +426,7 @@ void py_graph_t::on_user_refresh(mutable_graph_t *g)
         node_cache.clear();
 
         // Get the edges
-        for ( int i=(int)PyList_Size(edges.o)-1; i>=0; i-- )
+        for ( int i=(int)PyList_Size(edges.o)-1; i >= 0; i-- )
         {
           // Each list item is a sequence (id1, id2)
           borref_t item(PyList_GetItem(edges.o, i));
@@ -535,7 +436,7 @@ void py_graph_t::on_user_refresh(mutable_graph_t *g)
           // Get and validate each of the two elements in the sequence
           int edge_ids[2];
           int j;
-          for ( j=0; j<qnumber(edge_ids); j++ )
+          for ( j=0; j < qnumber(edge_ids); j++ )
           {
             newref_t id(PySequence_GetItem(item.o, j));
             if ( id == NULL || !PyInt_Check(id.o) )
@@ -611,27 +512,36 @@ bool py_graph_t::on_user_text(mutable_graph_t * /*g*/, int node, const char **st
 }
 
 //-------------------------------------------------------------------------
-int py_graph_t::on_user_hint(mutable_graph_t *, int mousenode, int /*mouseedge_src*/, int /*mouseedge_dst*/, char **hint)
+int py_graph_t::on_hint(char **hint, int node)
+{
+  PYW_GIL_CHECK_LOCKED_SCOPE();
+  newref_t result(PyObject_CallMethod(self.o, (char *)S_ON_HINT, "i", node));
+  PyW_ShowCbErr(S_ON_HINT);
+  return _on_hint_epilog(hint, result);
+}
+
+//-------------------------------------------------------------------------
+int py_graph_t::on_edge_hint(char **hint, int src, int dest)
+{
+  PYW_GIL_CHECK_LOCKED_SCOPE();
+  newref_t result(PyObject_CallMethod(self.o, (char *)S_ON_EDGE_HINT, "ii", src, dest));
+  PyW_ShowCbErr(S_ON_EDGE_HINT);
+  return _on_hint_epilog(hint, result);
+}
+
+//-------------------------------------------------------------------------
+int py_graph_t::_on_hint_epilog(char **hint, ref_t result)
 {
   // 'hint' must be allocated by qalloc() or qstrdup()
   // out: 0-use default hint, 1-use proposed hint
-
-  // We dispatch hints over nodes only
-  if ( mousenode == -1 )
-    return 0;
-
-  PYW_GIL_CHECK_LOCKED_SCOPE();
-  newref_t result(PyObject_CallMethod(self.o, (char *)S_ON_HINT, "i", mousenode));
-  PyW_ShowCbErr(S_ON_HINT);
   bool ok = result != NULL && PyString_Check(result.o);
   if ( ok )
     *hint = qstrdup(PyString_AsString(result.o));
-  return ok; // use our hint
+  return ok;
 }
 
-
 //-------------------------------------------------------------------------
-int py_graph_t::gr_callback(int code, va_list va)
+ssize_t py_graph_t::gr_callback(int code, va_list va)
 {
   int ret;
   switch ( code )
@@ -658,7 +568,7 @@ int py_graph_t::gr_callback(int code, va_list va)
       {
         graph_viewer_t *view     = va_arg(va, graph_viewer_t *);
         selection_item_t *item = va_arg(va, selection_item_t *);
-        graph_item_t    *gitem = va_arg(va, graph_item_t *);
+        graph_item_t *gitem    = va_arg(va, graph_item_t *);
         ret = on_clicked(view, item, gitem);
       }
       else
@@ -703,18 +613,18 @@ int py_graph_t::gr_callback(int code, va_list va)
       break;
       //
     case grcode_user_hint:
-      if ( has_callback(GRCODE_HAVE_USER_HINT) )
       {
         mutable_graph_t *g = va_arg(va, mutable_graph_t *);
-        int mousenode      = va_arg(va, int);
-        int mouseedge_src  = va_arg(va, int);
-        int mouseedge_dest = va_arg(va, int);
-        char **hint        = va_arg(va, char **);
-        ret = on_user_hint(g, mousenode, mouseedge_src, mouseedge_dest, hint);
-      }
-      else
-      {
-        ret = 0;
+        int node = va_arg(va, int);
+        int src = va_arg(va, int);
+        int dest = va_arg(va, int);
+        char **hint = va_arg(va, char **);
+        if ( node == -1 && has_callback(GRCODE_HAVE_EDGE_HINT) )
+          ret = on_edge_hint(hint, src, dest);
+        else if ( node >= 0 && has_callback(GRCODE_HAVE_HINT) )
+          ret = on_hint(hint, node);
+        else
+          ret = 0;
       }
       break;
       //
@@ -781,8 +691,6 @@ int py_graph_t::gr_callback(int code, va_list va)
 }
 
 //-------------------------------------------------------------------------
-py_graph_t::cmdid_map_t py_graph_t::cmdid_pyg;
-
 bool pyg_show(PyObject *self)
 {
   return py_graph_t::Show(self) != NULL;
@@ -790,13 +698,9 @@ bool pyg_show(PyObject *self)
 
 void pyg_close(PyObject *self)
 {
-  py_graph_t::Close(self);
-}
-
-PyObject *pyg_add_command(PyObject *self, const char *title, const char *hotkey)
-{
-  PYW_GIL_CHECK_LOCKED_SCOPE();
-  return Py_BuildValue("n", py_graph_t::AddCommand(self, title, hotkey));
+  py_graph_t *pyg = py_graph_t::Close(self);
+  if ( pyg != NULL )
+    delete pyg;
 }
 
 void pyg_select_node(PyObject *self, int nid)
@@ -809,7 +713,6 @@ void pyg_select_node(PyObject *self, int nid)
 
 //<inline(py_graph)>
 void pyg_close(PyObject *self);
-PyObject *pyg_add_command(PyObject *self, const char *title, const char *hotkey);
 void pyg_select_node(PyObject *self, int nid);
 bool pyg_show(PyObject *self);
 //</inline(py_graph)>

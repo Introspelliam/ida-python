@@ -4,6 +4,7 @@ Author: EiNSTeiN_ <einstein@g3nius.org>
 
 This is a rewrite in Python of the vds7 example that comes with hexrays sdk.
 """
+from __future__ import print_function
 
 import idautils
 import idaapi
@@ -29,34 +30,23 @@ class cblock_visitor_t(idaapi.ctree_visitor_t):
 
     def dump_block(self, ea, b):
         # iterate over all block instructions
-        print "dumping block %x" % (ea, )
+        print("dumping block %x" % (ea, ))
         for ins in b:
-            print "  %x: insn %s" % (ins.ea, ins.opname)
+            print("  %x: insn %s" % (ins.ea, ins.opname))
 
         return
 
-class hexrays_callback_info(object):
 
-    def __init__(self):
-        return
-
-    def event_callback(self, event, *args):
-
-        try:
-            if event == idaapi.hxe_maturity:
-                cfunc, maturity = args
-
-                if maturity == idaapi.CMAT_BUILT:
-                    cbv = cblock_visitor_t()
-                    cbv.apply_to(cfunc.body, None)
-
-        except:
-            traceback.print_exc()
-
+class vds7_hooks_t(idaapi.Hexrays_Hooks):
+    def maturity(self, cfunc, maturity):
+        if maturity == idaapi.CMAT_BUILT:
+            cbv = cblock_visitor_t()
+            cbv.apply_to(cfunc.body, None)
         return 0
 
+
 if idaapi.init_hexrays_plugin():
-    i = hexrays_callback_info()
-    idaapi.install_hexrays_callback(i.event_callback)
+    vds7_hooks = vds7_hooks_t()
+    vds7_hooks.hook()
 else:
-    print 'cblock visitor: hexrays is not available.'
+    print('cblock visitor: hexrays is not available.')

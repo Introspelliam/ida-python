@@ -1,3 +1,4 @@
+from __future__ import print_function
 # -----------------------------------------------------------------------
 # This is an example illustrating how to use customview in Python
 # (c) Hex-Rays
@@ -5,15 +6,15 @@
 import idaapi
 import idc
 from idaapi import simplecustviewer_t
-#<pycode(py_custviewerex1)>
 
+# -----------------------------------------------------------------------
 class say_something_handler_t(idaapi.action_handler_t):
     def __init__(self, thing):
         idaapi.action_handler_t.__init__(self)
         self.thing = thing
 
     def activate(self, ctx):
-        print self.thing
+        print(self.thing)
 
     def update(self, ctx):
         return idaapi.AST_ENABLE_ALWAYS
@@ -21,20 +22,28 @@ class say_something_handler_t(idaapi.action_handler_t):
 
 # -----------------------------------------------------------------------
 class mycv_t(simplecustviewer_t):
-    def Create(self, sn=None):
+    def Create(self, sn=None, use_colors=True):
         # Form the title
         title = "Simple custom view test"
         if sn:
             title += " %d" % sn
+        self.use_colors = use_colors
 
         # Create the customviewer
         if not simplecustviewer_t.Create(self, title):
             return False
 
         for i in xrange(0, 100):
-            self.AddLine("Line %d" % i)
-
-#        self.Jump(0)
+            prefix, bg = idaapi.COLOR_DEFAULT, None
+            # make every 10th line a bit special
+            if i % 10 == 0:
+                prefix = idaapi.COLOR_DNAME   # i.e., dark yellow...
+                bg = 0xFFFF00                 # ...on cyan
+            pfx = idaapi.COLSTR("%3d" % i, idaapi.SCOLOR_PREFIX)
+            if self.use_colors:
+                self.AddLine("%s: Line %d" % (pfx, i), fgcolor=prefix, bgcolor=bg)
+            else:
+                self.AddLine("%s: Line %d" % (pfx, i))
 
         return True
 
@@ -44,8 +53,14 @@ class mycv_t(simplecustviewer_t):
         @param shift: Shift flag
         @return: Boolean. True if you handled the event
         """
-        print "OnClick, shift=%d" % shift
+        print("OnClick, shift=%d" % shift)
         return True
+
+    def OnPopup(self, form, popup_handle):
+        for thing in ["Hello", "World"]:
+            actname = "custview:say_%s" % thing
+            desc = ida_kernwin.action_desc_t(actname, "Say %s" % thing, say_something_handler_t(thing))
+            ida_kernwin.attach_dynamic_action_to_popup(form, popup_handle, desc)
 
     def OnDblClick(self, shift):
         """
@@ -55,7 +70,7 @@ class mycv_t(simplecustviewer_t):
         """
         word = self.GetCurrentWord()
         if not word: word = "<None>"
-        print "OnDblClick, shift=%d, current word=%s" % (shift, word)
+        print("OnDblClick, shift=%d, current word=%s" % (shift, word))
         return True
 
     def OnCursorPosChanged(self):
@@ -63,14 +78,14 @@ class mycv_t(simplecustviewer_t):
         Cursor position changed.
         @return: Nothing
         """
-        print "OnCurposChanged"
+        print("OnCurposChanged")
 
     def OnClose(self):
         """
         The view is closing. Use this event to cleanup.
         @return: Nothing
         """
-        print "OnClose " + self.title
+        print("OnClose " + self.title)
 
     def OnKeydown(self, vkey, shift):
         """
@@ -79,7 +94,7 @@ class mycv_t(simplecustviewer_t):
         @param shift: Shift flag
         @return: Boolean. True if you handled the event
         """
-        print "OnKeydown, vk=%d shift=%d" % (vkey, shift)
+        print("OnKeydown, vk=%d shift=%d" % (vkey, shift))
         # ESCAPE?
         if vkey == 27:
             self.Close()
@@ -89,31 +104,31 @@ class mycv_t(simplecustviewer_t):
             if n is not None:
                 self.DelLine(n)
                 self.Refresh()
-                print "Deleted line %d" % n
+                print("Deleted line %d" % n)
         # Goto?
         elif vkey == ord('G'):
             n = self.GetLineNo()
             if n is not None:
-                v = idc.AskLong(self.GetLineNo(), "Where to go?")
+                v = idaapi.ask_long(self.GetLineNo(), "Where to go?")
                 if v:
                     self.Jump(v, 0, 5)
         elif vkey == ord('R'):
-            print "refreshing...."
+            print("refreshing....")
             self.Refresh()
         elif vkey == ord('C'):
-            print "refreshing current line..."
+            print("refreshing current line...")
             self.RefreshCurrent()
         elif vkey == ord('A'):
-            s = idc.AskStr("NewLine%d" % self.Count(), "Append new line")
+            s = idaapi.ask_str("NewLine%d" % self.Count(), 0, "Append new line")
             self.AddLine(s)
             self.Refresh()
         elif vkey == ord('X'):
-            print "Clearing all lines"
+            print("Clearing all lines")
             self.ClearLines()
             self.Refresh()
         elif vkey == ord('I'):
             n = self.GetLineNo()
-            s = idc.AskStr("InsertedLine%d" % n, "Insert new line")
+            s = idaapi.ask_str("InsertedLine%d" % n, 0, "Insert new line")
             self.InsertLine(n, s)
             self.Refresh()
         elif vkey == ord('E'):
@@ -121,11 +136,11 @@ class mycv_t(simplecustviewer_t):
             if not l:
                 return False
             n = self.GetLineNo()
-            print "curline=<%s>" % l
+            print("curline=<%s>" % l)
             l = l + idaapi.COLSTR("*", idaapi.SCOLOR_VOIDOP)
             self.EditLine(n, l)
             self.RefreshCurrent()
-            print "Edited line %d" % n
+            print("Edited line %d" % n)
         else:
             return False
         return True
@@ -144,7 +159,7 @@ class mycv_t(simplecustviewer_t):
 try:
     # created already?
     mycv
-    print "Already created, will close it..."
+    print("Already created, will close it...")
     mycv.Close()
     del mycv
 except:
@@ -153,17 +168,10 @@ except:
 def show_win():
     x = mycv_t()
     if not x.Create():
-        print "Failed to create!"
+        print("Failed to create!")
         return None
     x.Show()
-    tcc = x.GetTCustomControl()
-
-    # Register actions
-    for thing in ["Hello", "World"]:
-        actname = "custview:say_%s" % thing
-        idaapi.register_action(
-            idaapi.action_desc_t(actname, "Say %s" % thing, say_something_handler_t(thing)))
-        idaapi.attach_action_to_popup(tcc, None, actname)
+    tcc = x.GetWidget()
     return x
 
 mycv = show_win()
@@ -179,5 +187,3 @@ def make_many(n):
         v.Show()
         L.append(v)
     return L
-
-#</pycode(py_custviewerex1)>

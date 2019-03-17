@@ -1,8 +1,10 @@
-import idaapi
-import idc
-from idaapi import Choose2
+from __future__ import print_function
 
-def parse_pte(str):
+import ida_kernwin
+import ida_segment
+import ida_dbg
+
+def parse_pte(s):
     try:
         parse_pte.re
     except:
@@ -10,35 +12,32 @@ def parse_pte(str):
         parse_pte.items = ('pde', 'pte', 'pdec', 'ptec', 'pdepfn', 'pdepfns', 'ptepfn', 'ptepfns')
 
     m = parse_pte.re.search(s)
+    if not m:
+        return None
     r = {}
     for i in range(0, len(parse_pte.items)):
         r[parse_pte.items[i]] = m.group(i+1)
     return r
 
-class MyChoose2(Choose2):
+class MyChoose(ida_kernwin.Choose):
 
     def __init__(self, title, ea1, ea2):
-        Choose2.__init__(self, title, [ ["VA", 10], ["PTE attr", 30] ])
+        ida_kernwin.Choose.__init__(self, title, [ ["VA", 10], ["PTE attr", 30] ])
         self.ea1 = ea1
         self.ea2 = ea2
-        self.n = 0
         self.icon = 5
         self.items = []
         self.Refresh()
-        self.selcount = 0
 
     def OnGetLine(self, n):
-        print("getline %d" % n)
         return self.items[n]
 
     def OnGetSize(self):
-        n = len(self.items)
-        self.Refresh()
-        return n
+        return len(self.items)
 
     def OnRefresh(self, n):
-        print("refresh %d" % n)
-        return n
+        self.Refresh()
+        return (ida_kernwin.Choose.ALL_CHANGED, )
 
     def Refresh(self):
         items = []
@@ -46,11 +45,12 @@ class MyChoose2(Choose2):
         ea1 = self.ea1
         npages = (self.ea2 - ea1) / PG
         for i in range(npages):
-            r = idc.SendDbgCommand("!pte %x" % ea1)
-            if not r:
+            ok, r = ida_dbg.send_dbg_command("!pte %x" % ea1)
+            if not ok:
                 return False
             r = parse_pte(r)
-            items.append([hex(ea1), r['ptepfns']])
+            if r:
+                items.append([hex(ea1), r['ptepfns']])
             ea1 += PG
 
         self.items = items
@@ -59,7 +59,7 @@ class MyChoose2(Choose2):
 
     @staticmethod
     def Execute(ea1, ea2):
-        c = MyChoose2("PTE Viewer [%x..%x]" % (ea1, ea2), ea1, ea2)
+        c = MyChoose("PTE Viewer [%x..%x]" % (ea1, ea2), ea1, ea2)
         return (c, c.Show())
 
 
@@ -68,18 +68,19 @@ def DumpPTE(ea1, ea2):
     PG = 0x1000
     npages = (ea2 - ea1) / PG
     for i in range(npages):
-        r = idc.SendDbgCommand("!pte %x" % ea1)
-        if not r:
+        ok, r = ida_dbg.send_dbg_command("!pte %x" % ea1)
+        if not ok:
             return False
-        print r
         r = parse_pte(r)
-        print("VA: %08X  PTE: %s PDE: %s" % (ea1, r['ptepfns'], r['pdepfns']))
+        if r:
+            print("VA: %08X  PTE: %s PDE: %s" % (ea1, r['ptepfns'], r['pdepfns']))
         ea1 += PG
 
 def DumpSegPTE(ea):
-    DumpPTE(idc.SegStart(ea), idc.SegEnd(ea))
+    s = ida_segment.getseg(ea)
+    DumpPTE(s.start_ea, s.end_ea)
 
 DumpSegPTE(here())
 
-#MyChoose2.Execute(0xF718F000, 0xF718F000+0x1000)
+#MyChoose.Execute(0xF718F000, 0xF718F000+0x1000)
 

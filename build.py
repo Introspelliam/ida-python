@@ -9,598 +9,89 @@
 # For detailed copyright information see the file COPYING in
 # the root of the distribution archive.
 #---------------------------------------------------------------------
-# build.py - Custom build script
+# build.py - Makefile wrapper script
 #---------------------------------------------------------------------
-import os
-import platform
-import shutil
-import sys
-import types
-import zipfile
-import glob
-from distutils import sysconfig
-
-# Start of user configurable options
-VERBOSE = True
-
-IDA_MAJOR_VERSION = 6
-IDA_MINOR_VERSION = 8
-
-if 'IDA' in os.environ:
-    IDA_SDK = os.environ['IDA']
-else:
-    IDA_SDK = os.path.join("..", "..", "include")
-    if not os.path.exists(IDA_SDK):
-      IDA_SDK = os.path.join("..", "swigsdk-versions", ("%d.%d" % (IDA_MAJOR_VERSION, IDA_MINOR_VERSION)))
-    assert os.path.exists(IDA_SDK), "Could not find IDA SDK include path"
-
-
-# End of user configurable options
-
-# IDAPython version
-VERSION_MAJOR  = 1
-VERSION_MINOR  = 7
-VERSION_PATCH  = 0
-
-# Determine Python version
-PYTHON_MAJOR_VERSION = int(platform.python_version()[0])
-PYTHON_MINOR_VERSION = int(platform.python_version()[2])
-
-# Find Python headers
-PYTHON_INCLUDE_DIRECTORY = sysconfig.get_config_var('INCLUDEPY')
-
-S_EA64         = 'ea64'
-S_WITH_HEXRAYS = 'with-hexrays'
-S_NO_OPT       = 'no-opt'
-S_DEBUG        = 'debug'
-
-# Swig command-line parameters
-SWIG_OPTIONS = '-modern -python -threads -c++ -w451 -shadow -D__GNUC__'
-
-# Common macros for all compilations
-COMMON_MACROS = [
-    ("VER_MAJOR",  "%d" % VERSION_MAJOR),
-    ("VER_MINOR",  "%d" % VERSION_MINOR),
-    ("VER_PATCH",  "%d" % VERSION_PATCH),
-    "__IDP__",
-    ("MAXSTR", "1024"),
-    "USE_DANGEROUS_FUNCTIONS",
-    "USE_STANDARD_FILE_FUNCTIONS" ]
-
-# Common includes for all compilations
-COMMON_INCLUDES = [ ".", "swig" ]
-
-# -----------------------------------------------------------------------
-# List files for the binary distribution
-BINDIST_MANIFEST = [
-    "README.txt",
-    "COPYING.txt",
-    "CHANGES.txt",
-    "AUTHORS.txt",
-    "STATUS.txt",
-    "python.cfg",
-    "docs/notes.txt",
-    "examples/chooser.py",
-    "examples/colours.py",
-    "examples/ex_idphook_asm.py",
-    "examples/ex_uirequests.py",
-    "examples/debughook.py",
-    "examples/ex_cli.py",
-    "examples/ex1.idc",
-    "examples/ex_custdata.py",
-    "examples/ex1_idaapi.py",
-    "examples/ex1_idautils.py",
-    "examples/hotkey.py",
-    "examples/structure.py",
-    "examples/ex_gdl_qflow_chart.py",
-    "examples/ex_strings.py",
-    "examples/ex_actions.py",
-    "examples/ex_func_chooser.py",
-    "examples/ex_choose2.py",
-    "examples/ex_debug_names.py",
-    "examples/ex_graph.py",
-    "examples/ex_hotkey.py",
-    "examples/ex_patch.py",
-    "examples/ex_expr.py",
-    "examples/ex_timer.py",
-    "examples/ex_dbg.py",
-    "examples/ex_custview.py",
-    "examples/ex_prefix_plugin.py",
-    "examples/ex_pyside.py",
-    "examples/ex_pyqt.py",
-    "examples/ex_askusingform.py",
-    "examples/ex_uihook.py",
-    "examples/ex_idphook_asm.py",
-    "examples/ex_imports.py"
-]
-
-# -----------------------------------------------------------------------
-# List files for the source distribution (appended to binary list)
-SRCDIST_MANIFEST = [
-    "BUILDING.txt",
-    "python.cpp",
-    "basetsd.h",
-    "build.py",
-    "python.cfg",
-    "swig/allins.i",
-    "swig/area.i",
-    "swig/auto.i",
-    "swig/bytes.i",
-    "swig/dbg.i",
-    "swig/diskio.i",
-    "swig/entry.i",
-    "swig/enum.i",
-    "swig/expr.i",
-    "swig/fixup.i",
-    "swig/frame.i",
-    "swig/funcs.i",
-    "swig/gdl.i",
-    "swig/ida.i",
-    "swig/idaapi.i",
-    "swig/idd.i",
-    "swig/idp.i",
-    "swig/ints.i",
-    "swig/kernwin.i",
-    "swig/lines.i",
-    "swig/loader.i",
-    "swig/moves.i",
-    "swig/nalt.i",
-    "swig/name.i",
-    "swig/netnode.i",
-    "swig/offset.i",
-    "swig/pro.i",
-    "swig/queue.i",
-    "swig/search.i",
-    "swig/segment.i",
-    "swig/srarea.i",
-    "swig/strlist.i",
-    "swig/struct.i",
-    "swig/typeconv.i",
-    "swig/typeinf.i",
-    "swig/ua.i",
-    "swig/xref.i",
-    "swig/graph.i",
-    "swig/fpro.i",
-    "swig/hexrays.i",
-]
-
-# -----------------------------------------------------------------------
-def parse_options(args):
-    """Parse arguments and returned a dictionary of options"""
-
-    no_opt       = '--' + S_NO_OPT       in sys.argv
-    ea64         = '--' + S_EA64         in sys.argv
-    with_hexrays = '--' + S_WITH_HEXRAYS in sys.argv
-    debug        = '--' + S_DEBUG        in sys.argv
-
-    return {
-            S_EA64: ea64,
-            S_WITH_HEXRAYS: with_hexrays,
-            S_NO_OPT: no_opt,
-            S_DEBUG: debug
-           }
-
-# -----------------------------------------------------------------------
-class BuilderBase:
-    """ Base class for builders """
-    def __init__(self):
-        pass
-
-
-    def compile(self, source, objectname=None, includes=[], macros=[]):
-        """
-        Compile the source file
-        """
-        allmacros = []
-        allmacros.extend(COMMON_MACROS)
-        allmacros.extend(self.basemacros)
-        allmacros.extend(macros)
-        macrostring = self._build_command_string(allmacros, self.macro_delimiter)
-
-        allincludes = []
-        allincludes.extend(COMMON_INCLUDES)
-        allincludes.extend(includes)
-        includestring = self._build_command_string(allincludes, self.include_delimiter)
-
-        if not objectname:
-            objectname = source + self.object_extension
-
-        cmdstring = "%s %s %s %s %s %s" % (self.compiler,
-                                           self.compiler_parameters,
-                                           self.compiler_out_string(objectname),
-                                           self.compiler_in_string(source + self.source_extension),
-                                           includestring,
-                                           macrostring)
-
-        if VERBOSE:
-            print cmdstring
-        return os.system(cmdstring)
-
-
-    def link(self, objects, outfile, libpaths=[], libraries=[], extra_parameters=None):
-        """ Link the binary from objects and libraries """
-        cmdstring = "%s %s %s" % (self.linker,
-                                  self.linker_parameters,
-                                  self.linker_out_string(outfile))
-
-        for objectfile in objects:
-            cmdstring = "%s %s" % (cmdstring, objectfile + self.object_extension)
-        for libpath in libpaths:
-            cmdstring = "%s %s%s" % (cmdstring, self.libpath_delimiter, libpath)
-        for library in libraries:
-            cmdstring = "%s %s" % (cmdstring, library)
-        if extra_parameters:
-            cmdstring = "%s %s" % (cmdstring, extra_parameters)
-
-        if VERBOSE: print cmdstring
-        return os.system(cmdstring)
-
-    def _build_command_string(self, macros, argument_delimiter):
-        macrostring = ""
-
-        for item in macros:
-            if type(item) == types.TupleType:
-                macrostring += '%s%s="%s" ' % (argument_delimiter, item[0], item[1])
-            else:
-                macrostring += '%s%s ' % (argument_delimiter, item)
-
-        return macrostring
-
-
-# -----------------------------------------------------------------------
-class GCCBuilder(BuilderBase):
-    """ Generic GCC compiler class """
-    def __init__(self):
-        self.include_delimiter = "-I"
-        self.macro_delimiter = "-D"
-        self.libpath_delimiter = "-L"
-        self.compiler_parameters = "-fpermissive -Wno-write-strings"
-        self.linker_parameters = "-shared"
-        self.basemacros = [ ]
-        self.compiler = "g++ -m32"
-        self.linker = "g++ -m32"
-        self.source_extension = ".cpp"
-        self.object_extension = ".o"
-
-    def compiler_in_string(self, filename):
-        return "-c %s" % filename
-
-    def compiler_out_string(self, filename):
-        return "-o %s" % filename
-
-    def linker_out_string(self, filename):
-        return "-o %s" % filename
-
-
-# -----------------------------------------------------------------------
-class MSVCBuilder(BuilderBase):
-    """ Generic Visual C compiler class """
-    def __init__(self):
-        self.include_delimiter = "/I"
-        self.macro_delimiter = "/D"
-        self.libpath_delimiter = "/LIBPATH:"
-        self.compiler_parameters = "/nologo /EHsc"
-        self.linker_parameters = "/nologo /dll /export:PLUGIN"
-        self.basemacros = [ "WIN32",
-                            "_USRDLL",
-                            "__NT__" ]
-        self.compiler = "cl"
-        self.linker = "link"
-        self.source_extension = ".cpp"
-        self.object_extension = ".obj"
-
-    def compiler_in_string(self, filename):
-        return "/c %s" % filename
-
-    def compiler_out_string(self, filename):
-        return "/Fo%s" % filename
-
-    def linker_out_string(self, filename):
-        return "/out:%s" % filename
-
-# -----------------------------------------------------------------------
-def build_distribution(manifest, distrootdir, ea64, nukeold):
-    """ Create a distibution to a directory and a ZIP file """
-    # (Re)create the output directory
-    if os.path.exists(distrootdir):
-        if nukeold:
-            shutil.rmtree(distrootdir)
-            os.makedirs(distrootdir)
-    else:
-            os.makedirs(distrootdir)
-
-    # Also make a ZIP archive of the build
-    zippath = distrootdir + ".zip"
-    zip = zipfile.ZipFile(zippath, nukeold and "w" or "a", zipfile.ZIP_DEFLATED)
-
-    # Copy files, one by one
-    for f in manifest:
-        if type(f) == types.TupleType:
-            srcfilepath = f[0]
-            srcfilename = os.path.basename(srcfilepath)
-            dstdir = os.path.join(distrootdir, f[1])
-            dstfilepath = os.path.join(dstdir, srcfilename)
-        else:
-            srcfilepath = f
-            srcfilename = os.path.basename(f)
-            srcdir  = os.path.dirname(f)
-            if srcdir == "":
-                dstdir = distrootdir
-            else:
-                dstdir = os.path.join(distrootdir, srcdir)
-
-        if not os.path.exists(dstdir):
-            os.makedirs(dstdir)
-
-        dstfilepath = os.path.join(dstdir, srcfilename)
-        shutil.copyfile(srcfilepath, dstfilepath)
-        zip.write(dstfilepath)
-
-    zip.close()
-
-
-# -----------------------------------------------------------------------
-def build_plugin(
-        platform,
-        idasdkdir,
-        plugin_name,
-        options):
-    """ Build the plugin from the SWIG wrapper and plugin main source """
-
-    global SWIG_OPTIONS
-
-    # Get the arguments
-    ea64         = options[S_EA64]
-    with_hexrays = options[S_WITH_HEXRAYS]
-
-    # Path to the IDA SDK headers
-    ida_include_directory = os.path.join(idasdkdir, "include")
-
-    builder = None
-    # Platform-specific settings for the Linux build
-    if platform == "linux":
-        builder = GCCBuilder()
-        platform_macros = [ "__LINUX__" ]
-        python_libpath = os.path.join(sysconfig.EXEC_PREFIX, "lib")
-        python_library = "-Bdynamic -lpython%d.%d" % (PYTHON_MAJOR_VERSION, PYTHON_MINOR_VERSION)
-        ida_libpath = os.path.join(idasdkdir, "lib", ea64 and "x86_linux_gcc_64" or "x86_linux_gcc_32")
-        ida_lib = ""
-        extra_link_parameters = " -s"
-        builder.compiler_parameters += " -O2"
-    # Platform-specific settings for the Windows build
-    elif platform == "win32":
-        builder = MSVCBuilder()
-        platform_macros = [ "__NT__" ]
-        python_libpath = os.path.join(sysconfig.EXEC_PREFIX, "libs")
-        python_library = "python%d%d.lib" % (PYTHON_MAJOR_VERSION, PYTHON_MINOR_VERSION)
-        ida_libpath = os.path.join(idasdkdir, "lib", ea64 and "x86_win_vc_64" or "x86_win_vc_32")
-        ida_lib = "ida.lib"
-        SWIG_OPTIONS += " -D__NT__ "
-        extra_link_parameters = ""
-        if options[S_DEBUG]:
-            builder.compiler_parameters += " /Zi"
-            builder.linker_parameters += " /DEBUG"
-        if not options[S_NO_OPT] and not options[S_DEBUG]:
-            builder.compiler_parameters += " -Ox"
-    # Platform-specific settings for the Mac OS X build
-    elif platform == "macosx":
-        builder = GCCBuilder()
-        builder.linker_parameters = "-dynamiclib"
-        platform_macros = [ "__MAC__" ]
-        python_libpath = "."
-        python_library = "-framework Python"
-        ida_libpath = os.path.join(idasdkdir, "lib", ea64 and "x86_mac_gcc_64" or "x86_mac_gcc_32")
-        ida_lib = ea64 and "-lida64" or "-lida"
-        extra_link_parameters = " -s"
-        builder.compiler_parameters += " -O3"
-
-    assert builder, "Unknown platform! No idea how to build here..."
-
-    # Enable EA64 for the compiler if necessary
-    if ea64:
-        platform_macros.append("__EA64__")
-
-    # Build with Hex-Rays decompiler
-    if with_hexrays:
-        platform_macros.append("WITH_HEXRAYS")
-        SWIG_OPTIONS += ' -DWITH_HEXRAYS '
-
-    platform_macros.append("NDEBUG")
-
-    if not '--no-early-load' in sys.argv:
-        platform_macros.append("PLUGINFIX")
-
-    # Turn off obsolete functions
-    #platform_macros.append("NO_OBSOLETE_FUNCS")
-
-    # Build the wrapper from the interface files
-    ea64flag = ea64 and "-D__EA64__" or ""
-    swigcmd = "swig %s -Iswig -o idaapi.cpp %s -I%s idaapi.i" % (SWIG_OPTIONS, ea64flag, ida_include_directory)
-    if VERBOSE: print swigcmd
-    res =  os.system(swigcmd)
-    assert res == 0, "Failed to build the wrapper with SWIG"
-
-    # If we are running on windows, we have to patch some directors'
-    # virtual methods, so they have the right calling convention.
-    # Without that, compilation just won't succeed.
-    if platform == "win32":
-        res = os.system("python patch_directors_cc.py -f idaapi.h")
-        assert res == 0, "Failed to patch directors' calling conventions"
-
-    # Compile the wrapper
-    res = builder.compile("idaapi",
-                          includes=[ PYTHON_INCLUDE_DIRECTORY, ida_include_directory ],
-                          macros=platform_macros)
-    assert res == 0, "Failed to build the wrapper module"
-
-    # Compile the main plugin source
-    res =  builder.compile("python",
-                           includes=[ PYTHON_INCLUDE_DIRECTORY, ida_include_directory ],
-                           macros=platform_macros)
-    assert res == 0, "Failed to build the main plugin object"
-
-    # Link the final binary
-    res =  builder.link( ["idaapi", "python"],
-                         plugin_name,
-                         [ python_libpath, ida_libpath ],
-                         [ python_library, ida_lib ],
-                         extra_link_parameters)
-    assert res == 0, "Failed to link the plugin binary"
-
-# -----------------------------------------------------------------------
-def detect_platform(ea64):
-    # Detect the platform
-    system = platform.system()
-
-    if system == "Windows" or system == "Microsoft":
-        system = "Windows"
-        platform_string = "win32"
-        plugin_name = ea64 and "python.p64" or "python.plw"
-
-    elif system == "Linux":
-        platform_string = "linux"
-        plugin_name = ea64 and "python.plx64" or "python.plx"
-
-    elif system == "Darwin":
-        platform_string = "macosx"
-        plugin_name = ea64 and "python.pmc64" or "python.pmc"
-    else:
-        print "Unknown platform!"
-        sys.exit(-1)
-
-    return (system, platform_string, plugin_name)
-
-# -----------------------------------------------------------------------
-def build_binary_package(options, nukeold):
-    ea64 = options[S_EA64]
-    system, platform_string, plugin_name = detect_platform(ea64)
-    BINDISTDIR = "idapython-%d.%d.%d_ida%d.%d_py%d.%d_%s" % (VERSION_MAJOR,
-                                                             VERSION_MINOR,
-                                                             VERSION_PATCH,
-                                                             IDA_MAJOR_VERSION,
-                                                             IDA_MINOR_VERSION,
-                                                             PYTHON_MAJOR_VERSION,
-                                                             PYTHON_MINOR_VERSION,
-                                                             platform_string)
-    # Build the plugin
-    build_plugin(platform_string, IDA_SDK, plugin_name, options)
-
-    # Build the binary distribution
-    binmanifest = []
-    if nukeold:
-        binmanifest.extend(BINDIST_MANIFEST)
-
-    if not ea64 or nukeold:
-      binmanifest.extend([(x, "python") for x in "python/init.py", "python/idc.py", "python/idautils.py", "idaapi.py"])
-
-    binmanifest.append((plugin_name, "plugins"))
-
-    build_distribution(binmanifest, BINDISTDIR, ea64, nukeold)
-
-
-# -----------------------------------------------------------------------
-def build_source_package():
-    """ Build a directory and a ZIP file with all the sources """
-    SRCDISTDIR = "idapython-%d.%d.%d" % (VERSION_MAJOR,
-                                         VERSION_MINOR,
-                                         VERSION_PATCH)
-    # Build the source distribution
-    srcmanifest = []
-    srcmanifest.extend(BINDIST_MANIFEST)
-    srcmanifest.extend(SRCDIST_MANIFEST)
-    srcmanifest.extend([(x, "python") for x in "python/init.py", "python/idc.py", "python/idautils.py"])
-    build_distribution(srcmanifest, SRCDISTDIR, ea64=False, nukeold=True)
-
-# -----------------------------------------------------------------------
-def gen_docs(z = False):
-        print "Generating documentation....."
-        old_dir = os.getcwd()
-        try:
-            curdir = os.getcwd() + os.sep
-            docdir = 'idapython-reference-%d.%d.%d' % (VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH)
-            sys.path.append(curdir + 'python')
-            sys.path.append(curdir + 'tools')
-            sys.path.append(curdir + 'docs')
-            import epydoc.cli
-            import swigdocs
-            os.chdir('docs')
-            PYWRAPS_FN = 'pywraps'
-            swigdocs.gen_docs(outfn = PYWRAPS_FN + '.py')
-            epydoc.cli.optparse.sys.argv = [ 'epydoc',
-                                             '--no-sourcecode',
-                                             '-u', 'http://code.google.com/p/idapython/',
-                                             '--navlink', '<a href="http://www.hex-rays.com/idapro/idapython_docs/">IDAPython Reference</a>',
-                                             '--no-private',
-                                             '--simple-term',
-                                             '-o', docdir,
-                                             '--html',
-                                             'idc', 'idautils', PYWRAPS_FN, 'idaapi']
-            # Generate the documentation
-            epydoc.cli.cli()
-
-            print "Documentation generated!"
-
-            # Clean temp files
-            for f in [PYWRAPS_FN + '.py', PYWRAPS_FN + '.pyc']:
-                if os.path.exists(f):
-                  os.unlink(f)
-
-            if z:
-                z = docdir + '-doc.zip'
-                zip = zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED)
-                for fn in glob.glob(docdir + os.sep + '*'):
-                    zip.write(fn)
-                zip.close()
-                print "Documentation compressed to", z
-        except Exception, e:
-            print 'Failed to generate documentation:', e
-        finally:
-            os.chdir(old_dir)
-        return
-
-# -----------------------------------------------------------------------
-def usage():
-    print """IDAPython build script.
-
-Available switches:
-  --doc:
-    Generate documentation into the 'docs' directory
-  --zip:
-    Used with '--doc' switch. It will compress the generated documentation
-  --ea64:
-    Builds also the 64bit version of the plugin
-  --with-hexrays:
-    Build with the Hex-Rays Decompiler wrappings
-  --no-early-load:
-    The plugin will be compiled as normal plugin
-    This switch disables processor, plugin and loader scripts
-"""
+from __future__ import print_function
+import os, sys, argparse
+
+parser = argparse.ArgumentParser(epilog="""
+A very specific version of SWiG is expected in order to produce reliable
+bindings. If your platform doesn't provide that version by default and you
+had to build/install it yourself, you will have to specify '--swig-home'.
+
+What follows, are example build commands
+
+### Windows (assume SWiG is installed in C:\swigwin-2.0.12, and IDA is in C:\Program Files\IDA7)
+
+  python2 build.py \\
+      --with-hexrays \\
+      --swig-home C:/swigwin-2.0.12 \\
+      --idc "c:/Program\ Files/IDA_7.0-171130-tests/idc/idc.idc"
+
+
+### Linux/OSX (assume SWiG is installed in /opt/swiglinux-2.0.12, and IDA is in /opt/my-ida-install)
+
+  python2 build.py \\
+      --with-hexrays \\
+      --swig-home /opt/swiglinux-2.0.12 \\
+      --idc /opt/my-ida-install/idc/idc.idc
+""",
+                        formatter_class=argparse.RawTextHelpFormatter)
+parser.add_argument("--swig-home", type=str, help="Path to the SWIG installation", default=None)
+parser.add_argument("--with-hexrays", help="Build Hex-Rays decompiler bindings (requires the 'hexrays.hpp' header to be present in the SDK's include/ directory)", default=False, action="store_true")
+parser.add_argument("--debug", help="Build debug version of the plugin", default=False, action="store_true")
+if "linux" in sys.platform:
+    parser.add_argument("--python-home", help="Python home, where the 'include' directory can be found", default=None)
+parser.add_argument("-j", "--parallel", action="store_true", help="Build in parallel", default=False)
+parser.add_argument("-v", "--verbose", help="Verbose mode", default=False, action="store_true")
+parser.add_argument("-I", "--idc", required=True, help="IDA's idc.idc file (necessary for generating 6.95 compat API layer)", type=str)
+args = parser.parse_args()
+
+_probe = os.path.join("..", "..", "include", "pro.h")
+assert os.path.exists(_probe), "Could not find IDA SDK include path (looked for: \"%s\")" % _probe
+
+
+def run(proc_argv, env=None):
+    import subprocess
+    print("Running: \"%s\", with additional environment: \"%s\"" % (" ".join(proc_argv), str(env)))
+    full_env = os.environ.copy()
+    full_env.update(env)
+    subprocess.check_call(proc_argv, env=full_env)
+    return 0
 
 # -----------------------------------------------------------------------
 def main():
-    if '--help' in sys.argv:
-        return usage()
-    elif '--doc' in sys.argv:
-        return gen_docs(z = '--zip' in sys.argv)
 
-    if '--debug' in sys.argv:
-        debug = True
-
-    # Parse options
-    options = parse_options(sys.argv)
-    ea64 = options[S_EA64]
-
-    # Always build the non __EA64__ version
-    options[S_EA64] = False
-    build_binary_package(options, nukeold=True)
-
-    # Rebuild package with __EA64__ if needed
-    if ea64:
-        options[S_EA64] = True
-        build_binary_package(options, nukeold=False)
-
-    # Always build the source package
-    build_source_package()
+    argv = ["make"]
+    if args.parallel:
+        argv.append("-j")
+    env = {
+        "OUT_OF_TREE_BUILD" : "1"
+    }
+    if args.swig_home:
+        env["SWIG_HOME"] = args.swig_home
+    if args.with_hexrays:
+        env["HAS_HEXRAYS"] = "1"
+    if args.debug:
+        env["__NT__"] = "1" # to enable PDB flags
+    else:
+        env["NDEBUG"] = "1"
+    try:
+        if args.python_home:
+            env["LINUX_PYTHON_HOME"] = args.python_home
+    except:
+        pass
+    if args.verbose:
+        argv.append("-d")
+    env["IDC_BC695_IDC_SOURCE"] = args.idc
+    for ea64 in [False, True]:
+        if ea64:
+            env["__EA64__"] = "1"
+        else:
+            if "__EA64__" in env:
+                del env["__EA64__"]
+        print("\n### Building EAsize=%d(bit) version of the plugin" % (64 if ea64 else 32))
+        run(argv, env=env)
 
 # -----------------------------------------------------------------------
 if __name__ == "__main__":

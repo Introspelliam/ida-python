@@ -1,4 +1,4 @@
-""" Xref plugin for Hexrays Decompiler
+""" Xref script for Hexrays Decompiler
 
 Author: EiNSTeiN_ <einstein@g3nius.org>
 
@@ -8,6 +8,7 @@ Show decompiler-style Xref when the X key is pressed in the Decompiler window.
 - It supports structure member.
 
 """
+from __future__ import print_function
 
 import idautils
 import idaapi
@@ -15,17 +16,7 @@ import idc
 
 import traceback
 
-try:
-    from PyQt4 import QtCore, QtGui
-    print 'Using PyQt'
-except:
-    print 'PyQt not available'
-
-    try:
-        from PySide import QtGui, QtCore
-        print 'Using PySide'
-    except:
-        print 'PySide not available'
+from PyQt5 import QtCore, QtWidgets
 
 XREF_EA = 0
 XREF_STRUC_MEMBER = 1
@@ -70,18 +61,15 @@ class XrefsForm(idaapi.PluginForm):
         xtype.remove_ptr_or_array()
         typename = idaapi.print_tinfo('', 0, 0, idaapi.PRTYPE_1LINE, xtype, '', '')
 
-        sid = idc.GetStrucIdByName(typename)
-        member = idc.GetMemberName(sid, m)
+        sid = idc.get_struc_id(typename)
+        member = idc.get_member_name(sid, m)
 
         return '%s::%s' % (typename, member)
 
-    def OnCreate(self, form):
+    def OnCreate(self, widget):
 
         # Get parent widget
-        try:
-            self.parent = self.FormToPySideWidget(form)
-        except:
-            self.parent = self.FormToPyQtWidget(form)
+        self.parent = self.FormToPyQtWidget(widget)
 
         self.populate_form()
 
@@ -93,16 +81,16 @@ class XrefsForm(idaapi.PluginForm):
 
     def populate_form(self):
         # Create layout
-        layout = QtGui.QVBoxLayout()
+        layout = QtWidgets.QVBoxLayout()
 
-        layout.addWidget(QtGui.QLabel(self.__name))
-        self.table = QtGui.QTableWidget()
+        layout.addWidget(QtWidgets.QLabel(self.__name))
+        self.table = QtWidgets.QTableWidget()
         layout.addWidget(self.table)
 
         self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderItem(0, QtGui.QTableWidgetItem("Address"))
-        self.table.setHorizontalHeaderItem(1, QtGui.QTableWidgetItem("Function"))
-        self.table.setHorizontalHeaderItem(2, QtGui.QTableWidgetItem("Line"))
+        self.table.setHorizontalHeaderItem(0, QtWidgets.QTableWidgetItem("Address"))
+        self.table.setHorizontalHeaderItem(1, QtWidgets.QTableWidgetItem("Function"))
+        self.table.setHorizontalHeaderItem(2, QtWidgets.QTableWidgetItem("Line"))
 
         self.table.setColumnWidth(0, 80)
         self.table.setColumnWidth(1, 150)
@@ -110,8 +98,8 @@ class XrefsForm(idaapi.PluginForm):
 
         self.table.cellDoubleClicked.connect(self.double_clicked)
 
-        #~ self.table.setSelectionMode(QtGui.QAbstractItemView.NoSelection)
-        self.table.setSelectionBehavior(QtGui.QAbstractItemView.SelectRows )
+        #~ self.table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows )
         self.parent.setLayout(layout)
 
         self.populate_table()
@@ -127,9 +115,9 @@ class XrefsForm(idaapi.PluginForm):
 
     def get_decompiled_line(self, cfunc, ea):
 
-        print repr(ea)
+        print(repr(ea))
         if ea not in cfunc.eamap:
-            print 'strange, %x is not in %x eamap' % (ea, cfunc.entry_ea)
+            print('strange, %x is not in %x eamap' % (ea, cfunc.entry_ea))
             return
 
         insnvec = cfunc.eamap[ea]
@@ -157,10 +145,10 @@ class XrefsForm(idaapi.PluginForm):
                 cfunc = idaapi.decompile(ea)
 
                 self.functions.append(cfunc.entry_ea)
-                self.items.append((ea, idc.GetFunctionName(cfunc.entry_ea), self.get_decompiled_line(cfunc, ea)))
+                self.items.append((ea, idc.get_func_name(cfunc.entry_ea), self.get_decompiled_line(cfunc, ea)))
 
             except Exception as e:
-                print 'could not decompile: %s' % (str(e), )
+                print('could not decompile: %s' % (str(e), ))
                 raise
 
         return
@@ -180,7 +168,7 @@ class XrefsForm(idaapi.PluginForm):
             try:
                 cfunc = idaapi.decompile(ea)
             except:
-                print 'Decompilation of %x failed' % (ea, )
+                print('Decompilation of %x failed' % (ea, ))
                 continue
 
             str(cfunc)
@@ -208,14 +196,14 @@ class XrefsForm(idaapi.PluginForm):
                     parent = cfunc.body.find_parent_of(parent)
 
                 if not parent:
-                    print 'cannot find parent statement (?!)'
+                    print('cannot find parent statement (?!)')
                     continue
 
                 if parent.ea in addresses:
                     continue
 
                 if parent.ea == idaapi.BADADDR:
-                    print 'parent.ea is BADADDR'
+                    print('parent.ea is BADADDR')
                     continue
 
                 addresses.append(parent.ea)
@@ -223,7 +211,7 @@ class XrefsForm(idaapi.PluginForm):
                 self.functions.append(cfunc.entry_ea)
                 self.items.append((
                         parent.ea,
-                        idc.GetFunctionName(cfunc.entry_ea),
+                        idc.get_func_name(cfunc.entry_ea),
                         self.get_decompiled_line(cfunc, parent.ea)))
 
 
@@ -244,13 +232,13 @@ class XrefsForm(idaapi.PluginForm):
         i = 0
         for item in self.items:
             address, func, line = item
-            item = QtGui.QTableWidgetItem('0x%x' % (address, ))
+            item = QtWidgets.QTableWidgetItem('0x%x' % (address, ))
             item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
             self.table.setItem(i, 0, item)
-            item = QtGui.QTableWidgetItem(func)
+            item = QtWidgets.QTableWidgetItem(func)
             item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
             self.table.setItem(i, 1, item)
-            item = QtGui.QTableWidgetItem(line)
+            item = QtWidgets.QTableWidgetItem(line)
             item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
             self.table.setItem(i, 2, item)
 
@@ -260,7 +248,7 @@ class XrefsForm(idaapi.PluginForm):
 
         return
 
-    def OnClose(self, form):
+    def OnClose(self, widget):
         pass
 
 
@@ -270,9 +258,9 @@ class show_xrefs_ah_t(idaapi.action_handler_t):
         self.sel = None
 
     def activate(self, ctx):
-        vu = idaapi.get_tform_vdui(ctx.form)
+        vu = idaapi.get_widget_vdui(ctx.widget)
         if not vu or not self.sel:
-            print "No vdui? Strange, since this action should be enabled only for pseudocode views."
+            print("No vdui? Strange, since this action should be enabled only for pseudocode views.")
             return 0
 
         form = XrefsForm(self.sel)
@@ -280,45 +268,35 @@ class show_xrefs_ah_t(idaapi.action_handler_t):
         return 1
 
     def update(self, ctx):
-        vu = idaapi.get_tform_vdui(ctx.form)
-        if not vu:
-            return idaapi.AST_DISABLE_FOR_FORM
-        else:
-            vu.get_current_item(idaapi.USE_KEYBOARD)
-            item = vu.item
-            self.sel = None
-            if item.citype == idaapi.VDI_EXPR and item.it.to_specific_type.opname in ('obj', 'memref', 'memptr'):
-                # if an expression is selected. verify that it's either a cot_obj, cot_memref or cot_memptr
-                self.sel = item.it.to_specific_type
+        if ctx.widget_type != idaapi.BWN_PSEUDOCODE:
+            return idaapi.AST_DISABLE_FOR_WIDGET
+        vu = idaapi.get_widget_vdui(ctx.widget)
+        vu.get_current_item(idaapi.USE_KEYBOARD)
+        item = vu.item
+        self.sel = None
+        if item.citype == idaapi.VDI_EXPR and item.it.to_specific_type.opname in ('obj', 'memref', 'memptr'):
+            # if an expression is selected. verify that it's either a cot_obj, cot_memref or cot_memptr
+            self.sel = item.it.to_specific_type
 
-            elif item.citype == idaapi.VDI_FUNC:
-                # if the function itself is selected, show xrefs to it.
-                self.sel = item.f
+        elif item.citype == idaapi.VDI_FUNC:
+            # if the function itself is selected, show xrefs to it.
+            self.sel = item.f
 
-            return idaapi.AST_ENABLE if self.sel else idaapi.AST_DISABLE
+        return idaapi.AST_ENABLE if self.sel else idaapi.AST_DISABLE
 
-class hexrays_callback_info(object):
 
-    def __init__(self):
-        return
-
-    def event_callback(self, event, *args):
-
-        try:
-            if event == idaapi.hxe_populating_popup:
-                form, phandle, vu = args
-                idaapi.attach_action_to_popup(form, phandle, "vdsxrefs:show", None)
-        except:
-            traceback.print_exc()
-
+class vds_xrefs_hooks_t(idaapi.Hexrays_Hooks):
+    def populating_popup(self, widget, phandle, vu):
+        idaapi.attach_action_to_popup(widget, phandle, "vdsxrefs:show", None)
         return 0
+
 
 if idaapi.init_hexrays_plugin():
     adesc = idaapi.action_desc_t('vdsxrefs:show', 'Show xrefs', show_xrefs_ah_t(), "Ctrl+X")
     if idaapi.register_action(adesc):
-        i = hexrays_callback_info()
-        idaapi.install_hexrays_callback(i.event_callback)
+        vds_xrefs_hooks = vds_xrefs_hooks_t()
+        vds_xrefs_hooks.hook()
     else:
-        print "Couldn't register action."
+        print("Couldn't register action.")
 else:
-    print 'hexrays is not available.'
+    print('hexrays is not available.')

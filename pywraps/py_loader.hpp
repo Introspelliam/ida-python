@@ -21,7 +21,7 @@ def mem2base(mem, ea, fpos):
     pass
 #</pydoc>
 */
-static int py_mem2base(PyObject *py_mem, ea_t ea, long fpos = -1)
+static int py_mem2base(PyObject *py_mem, ea_t ea, qoff64_t fpos = -1)
 {
   Py_ssize_t len;
   char *buf;
@@ -49,8 +49,11 @@ def load_plugin(name):
 */
 static PyObject *py_load_plugin(const char *name)
 {
+  if ( qfileexist(name) )
+    prepare_programmatic_plugin_load(name);
   plugin_t *r = load_plugin(name);
   PYW_GIL_CHECK_LOCKED_SCOPE();
+  prepare_programmatic_plugin_load(NULL);
   if ( r == NULL )
     Py_RETURN_NONE;
   else
@@ -85,6 +88,16 @@ static bool py_run_plugin(PyObject *plg, int arg)
     Py_END_ALLOW_THREADS;
     return rc;
   }
+}
+
+//------------------------------------------------------------------------
+static bool py_load_and_run_plugin(const char *name, size_t arg)
+{
+  if ( qfileexist(name) )
+    prepare_programmatic_plugin_load(name);
+  bool rc = load_and_run_plugin(name, arg);
+  prepare_programmatic_plugin_load(NULL);
+  return rc;
 }
 
 //</inline(py_loader)>

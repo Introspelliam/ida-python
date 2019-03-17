@@ -19,29 +19,92 @@ static ea_t py_npthat(ea_t ea, ea_t bound, PyObject *py_callable, bool next)
   if ( !PyCallable_Check(py_callable) )
     return BADADDR;
   else
-    return (next ? nextthat : prevthat)(ea, bound, py_testf_cb, py_callable);
+    return (next ? next_that : prev_that)(ea, bound, py_testf_cb, py_callable);
 }
 
 //---------------------------------------------------------------------------
 static int idaapi py_visit_patched_bytes_cb(
-      ea_t ea,
-      int32 fpos,
-      uint32 o,
-      uint32 v,
-      void *ud)
+        ea_t ea,
+        qoff64_t fpos,
+        uint64 o,
+        uint64 v,
+        void *ud)
 {
   PYW_GIL_CHECK_LOCKED_SCOPE();
   newref_t py_result(
           PyObject_CallFunction(
                   (PyObject *)ud,
-                  PY_FMT64 "iII",
-                  pyul_t(ea),
+                  PY_BV_EA "LKK",
+                  bvea_t(ea),
                   fpos,
                   o,
                   v));
   PyW_ShowCbErr("visit_patched_bytes");
   return (py_result != NULL && PyInt_Check(py_result.o)) ? PyInt_AsLong(py_result.o) : 0;
 }
+
+//-------------------------------------------------------------------------
+static void ida_bytes_term(void) {}
+
+//-------------------------------------------------------------------------
+static void clear_custom_data_types_and_formats();
+static void ida_bytes_closebase(void)
+{
+  clear_custom_data_types_and_formats();
+}
+
+//-------------------------------------------------------------------------
+static bool py_do_get_bytes(
+        PyObject **out_py_bytes,
+        PyObject **out_py_mask,
+        ea_t ea,
+        unsigned int size,
+        int gmb_flags)
+{
+  PYW_GIL_CHECK_LOCKED_SCOPE();
+  bool has_mask = out_py_mask != NULL;
+  do
+  {
+    if ( size <= 0 )
+      break;
+
+    // Allocate memory via Python
+    newref_t py_bytes(PyString_FromStringAndSize(NULL, Py_ssize_t(size)));
+    if ( py_bytes == NULL )
+      break;
+
+    bytevec_t mask;
+    if ( has_mask )
+      mask.resize((size + 7) / 8, 0);
+
+    // Read bytes
+    int code = get_bytes(PyString_AsString(py_bytes.o),
+                         size,
+                         ea,
+                         gmb_flags,
+                         has_mask ? mask.begin() : NULL);
+    if ( code < 0 )
+      break;
+
+    // note: specify size, as '0' bytes would otherwise cut the mask short
+    if ( has_mask )
+    {
+      newref_t py_mask(PyString_FromStringAndSize(
+                               (const char *) mask.begin(),
+                               mask.size()));
+      if ( py_mask == NULL )
+        break;
+      py_mask.incref();
+      *out_py_mask = py_mask.o;
+    }
+
+    py_bytes.incref();
+    *out_py_bytes = py_bytes.o;
+    return true;
+  } while ( false );
+  return false;
+}
+
 //</code(py_bytes)>
 //------------------------------------------------------------------------
 
@@ -78,7 +141,7 @@ static int py_visit_patched_bytes(ea_t ea1, ea_t ea2, PyObject *py_callable)
 //------------------------------------------------------------------------
 /*
 #<pydoc>
-def nextthat(ea, maxea, callable):
+def next_that(ea, maxea, callable):
     """
     Find next address with a flag satisfying the function 'testf'.
     Start searching from address 'ea'+1 and inspect bytes up to 'maxea'.
@@ -91,13 +154,13 @@ def nextthat(ea, maxea, callable):
     pass
 #</pydoc>
 */
-static ea_t py_nextthat(ea_t ea, ea_t maxea, PyObject *callable)
+static ea_t py_next_that(ea_t ea, ea_t maxea, PyObject *callable)
 {
   return py_npthat(ea, maxea, callable, true);
 }
 
 //---------------------------------------------------------------------------
-static ea_t py_prevthat(ea_t ea, ea_t minea, PyObject *callable)
+static ea_t py_prev_that(ea_t ea, ea_t minea, PyObject *callable)
 {
   return py_npthat(ea, minea, callable, false);
 }
@@ -105,53 +168,57 @@ static ea_t py_prevthat(ea_t ea, ea_t minea, PyObject *callable)
 //------------------------------------------------------------------------
 /*
 #<pydoc>
-def get_many_bytes(ea, size):
+def get_bytes(ea, size):
     """
-    Get the specified number of bytes of the program into the buffer.
+    Get the specified number of bytes of the program.
     @param ea: program address
     @param size: number of bytes to return
-    @return: None or the string buffer
+    @return: the bytes (as a str), or None in case of failure
     """
     pass
 #</pydoc>
 */
-static PyObject *py_get_many_bytes(ea_t ea, unsigned int size)
+static PyObject *py_get_bytes(ea_t ea, unsigned int size, int gmb_flags=GMB_READALL)
 {
-  PYW_GIL_CHECK_LOCKED_SCOPE();
-  do
-  {
-    if ( size <= 0 )
-      break;
-
-    // Allocate memory via Python
-    newref_t py_buf(PyString_FromStringAndSize(NULL, Py_ssize_t(size)));
-    if ( py_buf == NULL )
-      break;
-
-    // Read bytes
-    if ( !get_many_bytes(ea, PyString_AsString(py_buf.o), size) )
-      Py_RETURN_NONE;
-
-    py_buf.incref();
-    return py_buf.o;
-  } while ( false );
-  Py_RETURN_NONE;
+  PyObject *py_bytes = NULL;
+  if ( py_do_get_bytes(&py_bytes, NULL, ea, size, gmb_flags) )
+    return py_bytes;
+  else
+    Py_RETURN_NONE;
 }
 
 //---------------------------------------------------------------------------
 /*
 #<pydoc>
-# Conversion options for get_ascii_contents2():
-ACFOPT_ASCII    = 0x00000000 # convert Unicode strings to ASCII
-ACFOPT_UTF16    = 0x00000001 # return UTF-16 (aka wide-char) array for Unicode strings
-                             # ignored for non-Unicode strings
-ACFOPT_UTF8     = 0x00000002 # convert Unicode strings to UTF-8
-                             # ignored for non-Unicode strings
-ACFOPT_CONVMASK = 0x0000000F
-ACFOPT_ESCAPE   = 0x00000010 # for ACFOPT_ASCII, convert non-printable
-                             # characters to C escapes (\n, \xNN, \uNNNN)
+def get_bytes_and_mask(ea, size, mask):
+    """
+    Get the specified number of bytes of the program, and a bitmask
+    specifying what bytes are defined and what bytes are not.
+    @param ea: program address
+    @param size: number of bytes to return
+    @return: a tuple (bytes, mask), or None in case of failure.
+             Both 'bytes' and 'mask' are 'str' instances.
+    """
+    pass
+#</pydoc>
+*/
+static PyObject *py_get_bytes_and_mask(ea_t ea, unsigned int size, int gmb_flags=GMB_READALL)
+{
+  PyObject *py_bytes = NULL;
+  PyObject *py_mask = NULL;
+  if ( py_do_get_bytes(&py_bytes, &py_mask, ea, size, gmb_flags) )
+    return Py_BuildValue("(OO)", py_bytes, py_mask);
+  else
+    Py_RETURN_NONE;
+}
 
-def get_ascii_contents2(ea, len, type, flags = ACFOPT_ASCII):
+//---------------------------------------------------------------------------
+/*
+#<pydoc>
+# Conversion options for get_strlit_contents():
+STRCONV_ESCAPE   = 0x00000001 # convert non-printable characters to C escapes (\n, \xNN, \uNNNN)
+
+def get_strlit_contents(ea, len, type, flags = 0):
   """
   Get bytes contents at location, possibly converted.
   It works even if the string has not been created in the database yet.
@@ -166,59 +233,95 @@ def get_ascii_contents2(ea, len, type, flags = ACFOPT_ASCII):
   @param len: length of the string in bytes (including terminating 0)
   @param type: type of the string. Represents both the character encoding,
                <u>and</u> the 'type' of string at the given location.
-  @param flags: combination of ACFOPT_..., to perform output conversion.
+  @param flags: combination of STRCONV_..., to perform output conversion.
   @return: a bytes-filled str object.
   """
   pass
 #</pydoc>
 */
-static PyObject *py_get_ascii_contents2(
-    ea_t ea,
-    size_t len,
-    int32 type,
-    int flags = ACFOPT_ASCII)
+static PyObject *py_get_strlit_contents(
+        ea_t ea,
+        PyObject *py_len,
+        int32 type,
+        int flags = 0)
 {
-  char *buf = (char *)qalloc(len+1);
-  if ( buf == NULL )
-    return NULL;
-
-  size_t used_size;
-  if ( !get_ascii_contents2(ea, len, type, buf, len+1, &used_size, flags) )
+  uint64 len;
+  if ( !PyW_GetNumber(py_len, &len) )
+    Py_RETURN_NONE;
+  if ( len == BADADDR )
+    len = uint64(-1);
+  qstring buf;
+  if ( len != uint64(-1) && ea_t(ea + len) < ea
+    || get_strlit_contents(&buf, ea, len, type, NULL, flags) < 0 )
   {
-    qfree(buf);
     Py_RETURN_NONE;
   }
-  if ( type == ASCSTR_C && used_size > 0 && buf[used_size-1] == '\0' )
-    used_size--;
+  if ( type == STRTYPE_C && buf.length() > 0 && buf.last() == '\0' )
+    buf.remove_last();
   PYW_GIL_CHECK_LOCKED_SCOPE();
-  newref_t py_buf(PyString_FromStringAndSize((const char *)buf, used_size));
-  qfree(buf);
+  newref_t py_buf(PyString_FromStringAndSize(buf.begin(), buf.length()));
   py_buf.incref();
   return py_buf.o;
 }
-//---------------------------------------------------------------------------
-/*
-#<pydoc>
-def get_ascii_contents(ea, len, type):
-  """
-  Get contents of ascii string
-  This function returns the displayed part of the string
-  It works even if the string has not been created in the database yet.
 
-  @param ea: linear address of the string
-  @param len: length of the string in bytes (including terminating 0)
-  @param type: type of the string
-  @return: string contents (not including terminating 0) or None
-  """
-  pass
-#</pydoc>
-*/
-static PyObject *py_get_ascii_contents(
-    ea_t ea,
-    size_t len,
-    int32 type)
+//-------------------------------------------------------------------------
+static ea_t py_bin_search(
+        ea_t start_ea,
+        ea_t end_ea,
+        const uchar *image,
+        size_t len,
+        const uchar *mask,
+        int step,
+        int flags)
 {
-  return py_get_ascii_contents2(ea, len, type);
+  if ( step != /* old value of BIN_SEARCH_FORWARD*/ 1
+    && step != /* new value of BIN_SEARCH_FORWARD */ 0 )
+  {
+    flags |= BIN_SEARCH_BACKWARD;
+  }
+  bytevec_t lmask;
+  if ( mask != NULL )
+  {
+    if ( *mask == 0xFF )
+    {
+      // a value of '0xFF' in the first byte meant "all bytes defined". We
+      // can thus turn that into a NULL mask.
+      mask = NULL;
+    }
+    else
+    {
+      // some bytes defined, some bytes aren't. Those that are have a value
+      // 1 in the mask. We must turn them into 0xFF's
+      lmask.resize(len);
+      for ( size_t i = 0; i < len; ++i )
+        lmask[i] = mask[i] != 0 ? 0xFF : 0;
+      mask = lmask.begin();
+    }
+  }
+  return bin_search2(start_ea, end_ea, image, mask, len, flags);
+}
+
+//-------------------------------------------------------------------------
+static PyObject *py_print_strlit_type(int32 strtype, int flags=0)
+{
+  qstring s, t;
+  if ( !print_strlit_type(&s, strtype, &t, flags) )
+    Py_RETURN_NONE;
+  return Py_BuildValue("(ss)", s.c_str(), t.c_str());
+}
+
+//-------------------------------------------------------------------------
+static PyObject *py_get_octet(ea_t ea, uint64 v, int nbit)
+{
+  uchar octet = get_octet(&ea, &v, &nbit);
+  return Py_BuildValue("(i" PY_BV_EA "Ki)", int(uint32(octet)), bvea_t(ea), v, nbit);
+}
+
+//-------------------------------------------------------------------------
+static PyObject *py_get_8bit(ea_t ea, uint32 v, int nbit)
+{
+  uchar octet = get_8bit(&ea, &v, &nbit);
+  return Py_BuildValue("(i" PY_BV_EA "ki)", int(uint32(octet)), bvea_t(ea), v, nbit);
 }
 //</inline(py_bytes)>
 
